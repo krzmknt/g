@@ -3,11 +3,18 @@ use crate::tui::{Buffer, Rect, Style};
 use crate::config::Theme;
 use crate::widgets::{Block, Borders, Scrollbar, Widget};
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DiffMode {
+    Inline,
+    SideBySide,
+}
+
 pub struct DiffView {
     pub diff: DiffInfo,
     pub current_file: usize,
     pub scroll: usize,
     pub show_line_numbers: bool,
+    pub mode: DiffMode,
 }
 
 impl DiffView {
@@ -17,6 +24,7 @@ impl DiffView {
             current_file: 0,
             scroll: 0,
             show_line_numbers: true,
+            mode: DiffMode::Inline,
         }
     }
 
@@ -58,6 +66,14 @@ impl DiffView {
         }
     }
 
+    pub fn toggle_mode(&mut self) {
+        self.mode = match self.mode {
+            DiffMode::Inline => DiffMode::SideBySide,
+            DiffMode::SideBySide => DiffMode::Inline,
+        };
+        self.scroll = 0;
+    }
+
     pub fn next_hunk(&mut self) {
         // TODO: Implement hunk navigation
     }
@@ -69,14 +85,20 @@ impl DiffView {
     pub fn render(&mut self, area: Rect, buf: &mut Buffer, theme: &Theme, focused: bool) {
         let border_color = if focused { theme.border_focused } else { theme.border };
 
+        let mode_indicator = match self.mode {
+            DiffMode::Inline => "inline",
+            DiffMode::SideBySide => "split",
+        };
+
         let title = if let Some(file) = self.current_file() {
-            format!(" Diff: {} (+{} -{}) ",
+            format!(" Diff: {} (+{} -{}) [{}] ",
                 file.path,
                 file.additions(),
-                file.deletions()
+                file.deletions(),
+                mode_indicator
             )
         } else {
-            " Diff ".to_string()
+            format!(" Diff [{}] ", mode_indicator)
         };
 
         let block = Block::new()
@@ -91,6 +113,13 @@ impl DiffView {
             return;
         }
 
+        match self.mode {
+            DiffMode::Inline => self.render_inline(inner, buf, theme),
+            DiffMode::SideBySide => self.render_side_by_side(inner, buf, theme),
+        }
+    }
+
+    fn render_inline(&mut self, inner: Rect, buf: &mut Buffer, theme: &Theme) {
         // Collect all lines from all hunks (owned data to avoid borrow issues)
         let lines: Vec<(Option<u32>, Option<u32>, LineType, String)> = {
             let Some(file) = self.current_file() else {
@@ -172,5 +201,167 @@ impl DiffView {
         let scrollbar = Scrollbar::new(lines.len(), visible_height, self.scroll);
         let scrollbar_area = Rect::new(inner.x + inner.width - 1, inner.y, 1, inner.height);
         scrollbar.render(scrollbar_area, buf, Style::new().fg(theme.border));
+    }
+
+    fn render_side_by_side(&mut self, inner: Rect, buf: &mut Buffer, theme: &Theme) {
+        // Build paired lines for side-by-side view
+        let paired_lines: Vec<(Option<(u32, String)>, Option<(u32, String)>)> = {
+            let Some(file) = self.current_file() else {
+                let msg = "No changes to display";
+                let x = inner.x + (inner.width.saturating_sub(msg.len() as u16)) / 2;
+                let y = inner.y + inner.height / 2;
+                buf.set_string(x, y, msg, Style::new().fg(theme.untracked));
+                return;
+            };
+
+            let mut pairs = Vec::new();
+
+            for hunk in &file.hunks {
+                // Hunk header spans both sides
+                pairs.push((
+                    Some((0, hunk.header.clone())),
+                    Some((0, hunk.header.clone()))
+                ));
+
+                // Collect deletions and additions separately, then pair them
+                let mut deletions: Vec<(u32, String)> = Vec::new();
+                let mut additions: Vec<(u32, String)> = Vec::new();
+
+                for line in &hunk.lines {
+                    match line.line_type {
+                        LineType::Context => {
+                            // Flush any pending deletions/additions
+                            Self::flush_pairs(&mut pairs, &mut deletions, &mut additions);
+
+                            let old_no = line.old_lineno.unwrap_or(0);
+                            let new_no = line.new_lineno.unwrap_or(0);
+                            let content = line.content.trim_end_matches('\n').to_string();
+                            pairs.push((
+                                Some((old_no, content.clone())),
+                                Some((new_no, content))
+                            ));
+                        }
+                        LineType::Deletion => {
+                            let line_no = line.old_lineno.unwrap_or(0);
+                            let content = line.content.trim_end_matches('\n').to_string();
+                            deletions.push((line_no, content));
+                        }
+                        LineType::Addition => {
+                            let line_no = line.new_lineno.unwrap_or(0);
+                            let content = line.content.trim_end_matches('\n').to_string();
+                            additions.push((line_no, content));
+                        }
+                    }
+                }
+
+                // Flush remaining
+                Self::flush_pairs(&mut pairs, &mut deletions, &mut additions);
+            }
+
+            pairs
+        };
+
+        // Adjust scroll
+        let max_scroll = paired_lines.len().saturating_sub(inner.height as usize);
+        if self.scroll > max_scroll {
+            self.scroll = max_scroll;
+        }
+
+        let visible_height = inner.height as usize;
+        let total_width = inner.width.saturating_sub(1); // Leave space for scrollbar
+        let half_width = total_width / 2;
+        let line_num_width: u16 = 4;
+
+        // Draw separator line
+        let sep_x = inner.x + half_width;
+        for y in inner.y..inner.y + inner.height {
+            buf.set_string(sep_x, y, "|", Style::new().fg(theme.border));
+        }
+
+        for (i, (left, right)) in paired_lines
+            .iter()
+            .skip(self.scroll)
+            .take(visible_height)
+            .enumerate()
+        {
+            let y = inner.y + i as u16;
+            let left_content_width = half_width.saturating_sub(line_num_width + 1);
+            let right_content_width = half_width.saturating_sub(line_num_width + 2);
+
+            // Left side (old/deletion)
+            if let Some((line_no, content)) = left {
+                let is_hunk_header = content.starts_with("@@");
+                let is_deletion = right.is_none() || (right.is_some() && left.as_ref().map(|(_, c)| c) != right.as_ref().map(|(_, c)| c));
+
+                let style = if is_hunk_header {
+                    Style::new().fg(theme.diff_hunk).bold()
+                } else if is_deletion && !right.is_some() {
+                    Style::new().fg(theme.diff_remove)
+                } else if is_deletion && right.is_some() && left.as_ref().map(|(_, c)| c) != right.as_ref().map(|(_, c)| c) {
+                    Style::new().fg(theme.diff_remove)
+                } else {
+                    Style::new().fg(theme.foreground)
+                };
+
+                // Line number
+                if *line_no > 0 {
+                    let num_str = format!("{:>3} ", line_no);
+                    buf.set_string(inner.x, y, &num_str, Style::new().fg(theme.untracked).dim());
+                } else {
+                    buf.set_string(inner.x, y, "    ", Style::new().fg(theme.untracked).dim());
+                }
+
+                // Content
+                buf.set_string_truncated(inner.x + line_num_width, y, content, left_content_width, style);
+            }
+
+            // Right side (new/addition)
+            let right_x = sep_x + 1;
+            if let Some((line_no, content)) = right {
+                let is_hunk_header = content.starts_with("@@");
+                let is_addition = left.is_none() || (left.is_some() && left.as_ref().map(|(_, c)| c) != right.as_ref().map(|(_, c)| c));
+
+                let style = if is_hunk_header {
+                    Style::new().fg(theme.diff_hunk).bold()
+                } else if is_addition && !left.is_some() {
+                    Style::new().fg(theme.diff_add)
+                } else if is_addition && left.is_some() && left.as_ref().map(|(_, c)| c) != right.as_ref().map(|(_, c)| c) {
+                    Style::new().fg(theme.diff_add)
+                } else {
+                    Style::new().fg(theme.foreground)
+                };
+
+                // Line number
+                if *line_no > 0 {
+                    let num_str = format!("{:>3} ", line_no);
+                    buf.set_string(right_x, y, &num_str, Style::new().fg(theme.untracked).dim());
+                } else {
+                    buf.set_string(right_x, y, "    ", Style::new().fg(theme.untracked).dim());
+                }
+
+                // Content
+                buf.set_string_truncated(right_x + line_num_width, y, content, right_content_width, style);
+            }
+        }
+
+        // Render scrollbar
+        let scrollbar = Scrollbar::new(paired_lines.len(), visible_height, self.scroll);
+        let scrollbar_area = Rect::new(inner.x + inner.width - 1, inner.y, 1, inner.height);
+        scrollbar.render(scrollbar_area, buf, Style::new().fg(theme.border));
+    }
+
+    fn flush_pairs(
+        pairs: &mut Vec<(Option<(u32, String)>, Option<(u32, String)>)>,
+        deletions: &mut Vec<(u32, String)>,
+        additions: &mut Vec<(u32, String)>,
+    ) {
+        let max_len = deletions.len().max(additions.len());
+        for i in 0..max_len {
+            let left = deletions.get(i).cloned();
+            let right = additions.get(i).cloned();
+            pairs.push((left, right));
+        }
+        deletions.clear();
+        additions.clear();
     }
 }

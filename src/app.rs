@@ -4,7 +4,7 @@ use crate::config::{Config, Theme};
 use crate::git::Repository;
 use crate::tui::{Terminal, Buffer, Rect, Style, Color};
 use crate::input::{EventReader, Event, KeyEvent, KeyCode, Modifiers};
-use crate::views::{StatusView, BranchesView, CommitsView, DiffView, Section};
+use crate::views::{StatusView, BranchesView, CommitsView, DiffView, DiffMode, Section};
 use crate::widgets::{Block, Borders, Widget};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -169,7 +169,7 @@ impl App {
 
             // Layout
             let (header, rest) = area.split_horizontal(1);
-            let (main, footer) = rest.split_horizontal(rest.height.saturating_sub(2));
+            let (main, footer) = rest.split_horizontal(rest.height.saturating_sub(3));
 
             // Header
             Self::render_header(buf, header, &theme, &repo_name, branch_name.as_deref(), commit_hash.as_deref(), ahead, behind, is_clean);
@@ -190,7 +190,7 @@ impl App {
             Self::render_diff_panel(buf, right, &theme, focused_panel == Panel::Diff, &mut self.diff_view);
 
             // Footer
-            Self::render_footer(buf, footer, &theme, mode, message.as_deref(), &input_buffer);
+            Self::render_footer(buf, footer, &theme, mode, message.as_deref(), &input_buffer, focused_panel);
         })?;
 
         Ok(())
@@ -251,19 +251,60 @@ impl App {
         view.render(area, buf, theme, focused);
     }
 
-    fn render_footer(buf: &mut Buffer, area: Rect, theme: &Theme, mode: Mode, message: Option<&str>, input: &str) {
-        // Message line
+    fn render_footer(buf: &mut Buffer, area: Rect, theme: &Theme, mode: Mode, message: Option<&str>, input: &str, focused_panel: Panel) {
+        // Message line (top of footer)
         if let Some(msg) = message {
             buf.set_string(area.x + 1, area.y, msg, Style::new().fg(theme.foreground));
         }
 
-        // Help/input line
-        let help_y = area.y + 1;
+        // Key style helper
+        let key_style = Style::new().fg(theme.branch_local).bold();
+        let desc_style = Style::new().fg(theme.untracked);
+        let sep_style = Style::new().fg(theme.border);
 
         match mode {
             Mode::Normal => {
-                let help = " [?] help  [q] quit  [1-4] panel  [j/k] move  [Enter] select  [/] search";
-                buf.set_string(area.x + 1, help_y, help, Style::new().fg(theme.untracked));
+                // Line 1: Global commands
+                let help_y1 = area.y + 1;
+                let global_cmds = [
+                    ("q", "quit"),
+                    ("Tab/←→", "panel"),
+                    ("j/k", "move"),
+                    ("Enter", "select"),
+                    ("/", "search"),
+                    ("r", "refresh"),
+                    ("T", "theme"),
+                ];
+                Self::render_command_line(buf, area.x + 1, help_y1, &global_cmds, key_style, desc_style, sep_style, area.width.saturating_sub(2));
+
+                // Line 2: Panel-specific commands
+                let help_y2 = area.y + 2;
+                let panel_cmds: &[(&str, &str)] = match focused_panel {
+                    Panel::Status => &[
+                        ("a", "stage all"),
+                        ("A", "unstage all"),
+                        ("c", "commit"),
+                        ("d", "discard"),
+                        ("s", "stash"),
+                        ("P", "push"),
+                    ],
+                    Panel::Branches => &[
+                        ("n", "new branch"),
+                        ("t", "toggle local/remote"),
+                        ("d", "delete (merged)"),
+                        ("D", "force delete"),
+                    ],
+                    Panel::Commits => &[
+                        ("Enter", "view diff"),
+                        ("c", "checkout"),
+                        ("R", "revert"),
+                    ],
+                    Panel::Diff => &[
+                        ("j/k", "scroll"),
+                        ("v", "toggle inline/split"),
+                    ],
+                };
+                Self::render_command_line(buf, area.x + 1, help_y2, panel_cmds, key_style, desc_style, sep_style, area.width.saturating_sub(2));
             }
             Mode::Search | Mode::Input(_) => {
                 let prompt = match mode {
@@ -276,12 +317,43 @@ impl App {
                     _ => "> ",
                 };
                 let line = format!("{}{}", prompt, input);
-                buf.set_string(area.x + 1, help_y, &line, Style::new().fg(theme.foreground));
+                buf.set_string(area.x + 1, area.y + 1, &line, Style::new().fg(theme.foreground));
+
+                // Show input help
+                let input_help = [("Enter", "confirm"), ("Esc", "cancel")];
+                Self::render_command_line(buf, area.x + 1, area.y + 2, &input_help, key_style, desc_style, sep_style, area.width.saturating_sub(2));
             }
             Mode::Command => {
                 let line = format!(":{}", input);
-                buf.set_string(area.x + 1, help_y, &line, Style::new().fg(theme.foreground));
+                buf.set_string(area.x + 1, area.y + 1, &line, Style::new().fg(theme.foreground));
             }
+        }
+    }
+
+    fn render_command_line(buf: &mut Buffer, x: u16, y: u16, cmds: &[(&str, &str)], key_style: Style, desc_style: Style, sep_style: Style, max_width: u16) {
+        let mut current_x = x;
+        for (i, (key, desc)) in cmds.iter().enumerate() {
+            if current_x >= x + max_width {
+                break;
+            }
+
+            // Add separator
+            if i > 0 {
+                buf.set_string(current_x, y, " | ", sep_style);
+                current_x += 3;
+            }
+
+            // Key
+            buf.set_string(current_x, y, key, key_style);
+            current_x += key.len() as u16;
+
+            // Space
+            buf.set_string(current_x, y, ":", sep_style);
+            current_x += 1;
+
+            // Description
+            buf.set_string(current_x, y, desc, desc_style);
+            current_x += desc.len() as u16;
         }
     }
 
@@ -382,6 +454,89 @@ impl App {
             KeyCode::Char('t') if self.focused_panel == Panel::Branches => {
                 self.branches_view.toggle_remote();
                 self.refresh_branches()?;
+            }
+
+            // Branch delete (safe - only merged branches)
+            KeyCode::Char('d') if self.focused_panel == Panel::Branches => {
+                if let Some(branch) = self.branches_view.selected_branch() {
+                    if branch.is_head {
+                        self.message = Some("Cannot delete current branch".to_string());
+                    } else {
+                        let name = branch.name.clone();
+                        match self.repo.delete_branch(&name, false) {
+                            Ok(()) => {
+                                self.message = Some(format!("Deleted branch: {}", name));
+                                self.refresh_branches()?;
+                            }
+                            Err(e) => {
+                                self.message = Some(format!("{}", e));
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Branch force delete (even unmerged branches)
+            KeyCode::Char('D') if self.focused_panel == Panel::Branches => {
+                if let Some(branch) = self.branches_view.selected_branch() {
+                    if branch.is_head {
+                        self.message = Some("Cannot delete current branch".to_string());
+                    } else {
+                        let name = branch.name.clone();
+                        match self.repo.delete_branch(&name, true) {
+                            Ok(()) => {
+                                self.message = Some(format!("Force deleted branch: {}", name));
+                                self.refresh_branches()?;
+                            }
+                            Err(e) => {
+                                self.message = Some(format!("Failed to delete: {}", e));
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Commits panel actions
+            KeyCode::Char('c') if self.focused_panel == Panel::Commits => {
+                // Checkout (detached HEAD)
+                if let Some(commit) = self.commits_view.selected_commit() {
+                    let short_id = commit.short_id.clone();
+                    match self.repo.checkout_commit(&commit.id) {
+                        Ok(()) => {
+                            self.message = Some(format!("Checked out: {}", short_id));
+                            self.refresh_all()?;
+                        }
+                        Err(e) => {
+                            self.message = Some(format!("Checkout failed: {}", e));
+                        }
+                    }
+                }
+            }
+
+            KeyCode::Char('R') if self.focused_panel == Panel::Commits => {
+                // Revert commit
+                if let Some(commit) = self.commits_view.selected_commit() {
+                    let short_id = commit.short_id.clone();
+                    match self.repo.revert_commit(&commit.id) {
+                        Ok(()) => {
+                            self.message = Some(format!("Reverted: {}", short_id));
+                            self.refresh_all()?;
+                        }
+                        Err(e) => {
+                            self.message = Some(format!("Revert failed: {}", e));
+                        }
+                    }
+                }
+            }
+
+            // Diff view toggle (inline/split)
+            KeyCode::Char('v') if self.focused_panel == Panel::Diff => {
+                self.diff_view.toggle_mode();
+                let mode_name = match self.diff_view.mode {
+                    DiffMode::Inline => "inline",
+                    DiffMode::SideBySide => "side-by-side",
+                };
+                self.message = Some(format!("Diff mode: {}", mode_name));
             }
 
             KeyCode::Char('r') => {

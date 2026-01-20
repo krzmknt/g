@@ -165,8 +165,25 @@ impl Repository {
     pub fn delete_branch(&self, name: &str, force: bool) -> Result<()> {
         let mut branch = self.repo.find_branch(name, git2::BranchType::Local)?;
 
-        if !force && branch.is_head() {
+        if branch.is_head() {
             return Err(Error::Git(git2::Error::from_str("Cannot delete current branch")));
+        }
+
+        // Check if branch is merged into HEAD
+        if !force {
+            let branch_commit = branch.get().peel_to_commit()?;
+            let head_commit = self.repo.head()?.peel_to_commit()?;
+
+            // Check if branch commit is ancestor of HEAD (i.e., merged)
+            let is_merged = self.repo.merge_base(branch_commit.id(), head_commit.id())
+                .map(|base| base == branch_commit.id())
+                .unwrap_or(false);
+
+            if !is_merged {
+                return Err(Error::Git(git2::Error::from_str(
+                    "Branch not fully merged. Use D to force delete."
+                )));
+            }
         }
 
         branch.delete()?;
@@ -185,6 +202,24 @@ impl Repository {
     pub fn rename_branch(&self, old_name: &str, new_name: &str) -> Result<()> {
         let mut branch = self.repo.find_branch(old_name, git2::BranchType::Local)?;
         branch.rename(new_name, false)?;
+        Ok(())
+    }
+
+    pub fn checkout_commit(&self, commit_id: &str) -> Result<()> {
+        let obj = self.repo.revparse_single(commit_id)?;
+        let commit = obj.peel_to_commit()?;
+
+        self.repo.checkout_tree(&commit.into_object(), None)?;
+        self.repo.set_head_detached(obj.id())?;
+        Ok(())
+    }
+
+    pub fn revert_commit(&self, commit_id: &str) -> Result<()> {
+        let obj = self.repo.revparse_single(commit_id)?;
+        let commit = obj.peel_to_commit()?;
+
+        // Revert creates a new commit that undoes the changes
+        self.repo.revert(&commit, None)?;
         Ok(())
     }
 
