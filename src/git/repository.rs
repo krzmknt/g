@@ -1,0 +1,579 @@
+use std::path::{Path, PathBuf};
+use git2::{Repository as Git2Repository, Signature};
+use crate::error::{Error, Result};
+use super::branch::{BranchInfo, BranchType};
+use super::commit::CommitInfo;
+use super::status::{StatusEntry, FileStatus};
+use super::diff::{DiffInfo, FileDiff, Hunk, DiffLine, LineType};
+use super::stash::StashEntry;
+use super::tag::TagInfo;
+
+pub struct Repository {
+    repo: Git2Repository,
+    path: PathBuf,
+}
+
+impl Repository {
+    pub fn discover() -> Result<Self> {
+        let repo = Git2Repository::discover(".")?;
+        let path = repo.workdir()
+            .unwrap_or_else(|| repo.path())
+            .to_path_buf();
+        Ok(Self { repo, path })
+    }
+
+    pub fn open<P: AsRef<Path>>(path: P) -> Result<Self> {
+        let repo = Git2Repository::open(path.as_ref())?;
+        let path = repo.workdir()
+            .unwrap_or_else(|| repo.path())
+            .to_path_buf();
+        Ok(Self { repo, path })
+    }
+
+    pub fn path(&self) -> &Path {
+        &self.path
+    }
+
+    pub fn name(&self) -> String {
+        self.path
+            .file_name()
+            .map(|s| s.to_string_lossy().to_string())
+            .unwrap_or_else(|| "unknown".to_string())
+    }
+
+    pub fn head_name(&self) -> Result<Option<String>> {
+        let head = self.repo.head()?;
+        if head.is_branch() {
+            Ok(head.shorthand().map(|s| s.to_string()))
+        } else {
+            // Detached HEAD
+            Ok(None)
+        }
+    }
+
+    pub fn head_commit_short(&self) -> Result<String> {
+        let head = self.repo.head()?;
+        let commit = head.peel_to_commit()?;
+        let id = commit.id().to_string();
+        Ok(id[..7.min(id.len())].to_string())
+    }
+
+    pub fn is_clean(&self) -> Result<bool> {
+        let statuses = self.repo.statuses(None)?;
+        Ok(statuses.is_empty())
+    }
+
+    pub fn ahead_behind(&self) -> Result<(usize, usize)> {
+        let head = match self.repo.head() {
+            Ok(h) => h,
+            Err(_) => return Ok((0, 0)),
+        };
+
+        if !head.is_branch() {
+            return Ok((0, 0));
+        }
+
+        let branch_name = match head.shorthand() {
+            Some(n) => n,
+            None => return Ok((0, 0)),
+        };
+
+        let local = self.repo.find_branch(branch_name, git2::BranchType::Local)?;
+        let upstream = match local.upstream() {
+            Ok(u) => u,
+            Err(_) => return Ok((0, 0)),
+        };
+
+        let local_oid = local.get().target().unwrap();
+        let upstream_oid = upstream.get().target().unwrap();
+
+        let (ahead, behind) = self.repo.graph_ahead_behind(local_oid, upstream_oid)?;
+        Ok((ahead, behind))
+    }
+
+    // Branch operations
+    pub fn branches(&self, include_remote: bool) -> Result<Vec<BranchInfo>> {
+        let mut branches = Vec::new();
+
+        // Local branches
+        for branch_result in self.repo.branches(Some(git2::BranchType::Local))? {
+            let (branch, _) = branch_result?;
+            let name = branch.name()?.unwrap_or("").to_string();
+            let is_head = branch.is_head();
+
+            let commit = branch.get().peel_to_commit()?;
+            let last_commit = CommitInfo::from_commit(&commit);
+
+            // Get upstream tracking info
+            let (ahead, behind) = match branch.upstream() {
+                Ok(upstream) => {
+                    let local_oid = branch.get().target().unwrap();
+                    let upstream_oid = upstream.get().target().unwrap();
+                    self.repo.graph_ahead_behind(local_oid, upstream_oid).unwrap_or((0, 0))
+                }
+                Err(_) => (0, 0),
+            };
+
+            branches.push(BranchInfo {
+                name,
+                branch_type: BranchType::Local,
+                is_head,
+                last_commit,
+                ahead,
+                behind,
+            });
+        }
+
+        // Remote branches
+        if include_remote {
+            for branch_result in self.repo.branches(Some(git2::BranchType::Remote))? {
+                let (branch, _) = branch_result?;
+                let name = branch.name()?.unwrap_or("").to_string();
+
+                let commit = branch.get().peel_to_commit()?;
+                let last_commit = CommitInfo::from_commit(&commit);
+
+                branches.push(BranchInfo {
+                    name,
+                    branch_type: BranchType::Remote,
+                    is_head: false,
+                    last_commit,
+                    ahead: 0,
+                    behind: 0,
+                });
+            }
+        }
+
+        Ok(branches)
+    }
+
+    pub fn create_branch(&self, name: &str, target: Option<&str>) -> Result<()> {
+        let commit = match target {
+            Some(ref_name) => {
+                let obj = self.repo.revparse_single(ref_name)?;
+                obj.peel_to_commit()?
+            }
+            None => {
+                self.repo.head()?.peel_to_commit()?
+            }
+        };
+
+        self.repo.branch(name, &commit, false)?;
+        Ok(())
+    }
+
+    pub fn delete_branch(&self, name: &str, force: bool) -> Result<()> {
+        let mut branch = self.repo.find_branch(name, git2::BranchType::Local)?;
+
+        if !force && branch.is_head() {
+            return Err(Error::Git(git2::Error::from_str("Cannot delete current branch")));
+        }
+
+        branch.delete()?;
+        Ok(())
+    }
+
+    pub fn switch_branch(&self, name: &str) -> Result<()> {
+        let refname = format!("refs/heads/{}", name);
+        let obj = self.repo.revparse_single(&refname)?;
+
+        self.repo.checkout_tree(&obj, None)?;
+        self.repo.set_head(&refname)?;
+        Ok(())
+    }
+
+    pub fn rename_branch(&self, old_name: &str, new_name: &str) -> Result<()> {
+        let mut branch = self.repo.find_branch(old_name, git2::BranchType::Local)?;
+        branch.rename(new_name, false)?;
+        Ok(())
+    }
+
+    // Commit operations
+    pub fn commits(&self, max_count: usize) -> Result<Vec<CommitInfo>> {
+        let mut revwalk = self.repo.revwalk()?;
+        revwalk.push_head()?;
+        revwalk.set_sorting(git2::Sort::TIME)?;
+
+        let mut commits = Vec::with_capacity(max_count);
+
+        for (i, oid) in revwalk.enumerate() {
+            if i >= max_count {
+                break;
+            }
+
+            let oid = oid?;
+            let commit = self.repo.find_commit(oid)?;
+            commits.push(CommitInfo::from_commit(&commit));
+        }
+
+        Ok(commits)
+    }
+
+    pub fn search_commits(&self, query: &str, max_count: usize) -> Result<Vec<CommitInfo>> {
+        let mut revwalk = self.repo.revwalk()?;
+        revwalk.push_head()?;
+        revwalk.set_sorting(git2::Sort::TIME)?;
+
+        let query_lower = query.to_lowercase();
+        let mut commits = Vec::new();
+
+        for oid in revwalk {
+            let oid = oid?;
+            let commit = self.repo.find_commit(oid)?;
+
+            let message = commit.message().unwrap_or("").to_string();
+            let author = commit.author().name().unwrap_or("").to_string();
+
+            if message.to_lowercase().contains(&query_lower)
+                || author.to_lowercase().contains(&query_lower)
+            {
+                commits.push(CommitInfo::from_commit(&commit));
+                if commits.len() >= max_count {
+                    break;
+                }
+            }
+        }
+
+        Ok(commits)
+    }
+
+    pub fn commit(&self, message: &str) -> Result<String> {
+        let mut index = self.repo.index()?;
+        let oid = index.write_tree()?;
+        let tree = self.repo.find_tree(oid)?;
+
+        let signature = self.repo.signature()?;
+        let parent_commit = self.repo.head()?.peel_to_commit()?;
+
+        let commit_oid = self.repo.commit(
+            Some("HEAD"),
+            &signature,
+            &signature,
+            message,
+            &tree,
+            &[&parent_commit],
+        )?;
+
+        Ok(commit_oid.to_string())
+    }
+
+    // Status operations
+    pub fn status(&self) -> Result<Vec<StatusEntry>> {
+        let mut opts = git2::StatusOptions::new();
+        opts.include_untracked(true);
+        opts.recurse_untracked_dirs(true);
+
+        let statuses = self.repo.statuses(Some(&mut opts))?;
+        let mut entries = Vec::new();
+
+        for entry in statuses.iter() {
+            let path = entry.path().unwrap_or("").to_string();
+            let status = entry.status();
+
+            entries.push(StatusEntry {
+                path,
+                staged: FileStatus::from_index_status(status),
+                unstaged: FileStatus::from_workdir_status(status),
+            });
+        }
+
+        Ok(entries)
+    }
+
+    pub fn stage_file(&self, path: &str) -> Result<()> {
+        let mut index = self.repo.index()?;
+        index.add_path(Path::new(path))?;
+        index.write()?;
+        Ok(())
+    }
+
+    pub fn unstage_file(&self, path: &str) -> Result<()> {
+        let head = self.repo.head()?.peel_to_commit()?;
+        self.repo.reset_default(Some(&head.into_object()), &[Path::new(path)])?;
+        Ok(())
+    }
+
+    pub fn stage_all(&self) -> Result<()> {
+        let mut index = self.repo.index()?;
+        index.add_all(["*"].iter(), git2::IndexAddOption::DEFAULT, None)?;
+        index.write()?;
+        Ok(())
+    }
+
+    pub fn unstage_all(&self) -> Result<()> {
+        let head = self.repo.head()?.peel_to_commit()?;
+        self.repo.reset(&head.into_object(), git2::ResetType::Mixed, None)?;
+        Ok(())
+    }
+
+    pub fn discard_file(&self, path: &str) -> Result<()> {
+        let mut opts = git2::build::CheckoutBuilder::new();
+        opts.path(path);
+        opts.force();
+        self.repo.checkout_head(Some(&mut opts))?;
+        Ok(())
+    }
+
+    // Diff operations
+    pub fn diff_staged(&self) -> Result<DiffInfo> {
+        let head_tree = self.repo.head()?.peel_to_tree()?;
+        let diff = self.repo.diff_tree_to_index(Some(&head_tree), None, None)?;
+        Self::parse_diff(&diff)
+    }
+
+    pub fn diff_unstaged(&self) -> Result<DiffInfo> {
+        let diff = self.repo.diff_index_to_workdir(None, None)?;
+        Self::parse_diff(&diff)
+    }
+
+    fn parse_diff(diff: &git2::Diff) -> Result<DiffInfo> {
+        let mut files = Vec::new();
+        let mut current_file: Option<FileDiff> = None;
+        let mut current_hunk: Option<Hunk> = None;
+        let mut last_hunk_start: Option<(u32, u32)> = None;
+
+        diff.print(git2::DiffFormat::Patch, |delta, hunk, line| {
+            let file_path = delta.new_file().path()
+                .or_else(|| delta.old_file().path())
+                .map(|p| p.to_string_lossy().to_string())
+                .unwrap_or_default();
+
+            // Check if we're starting a new file
+            if current_file.as_ref().map(|f| &f.path) != Some(&file_path) {
+                if let Some(mut file) = current_file.take() {
+                    if let Some(h) = current_hunk.take() {
+                        file.hunks.push(h);
+                    }
+                    files.push(file);
+                }
+                current_file = Some(FileDiff {
+                    path: file_path.clone(),
+                    hunks: Vec::new(),
+                });
+                last_hunk_start = None;
+            }
+
+            // Check if we're starting a new hunk (only when hunk start position changes)
+            if let Some(h) = hunk {
+                let hunk_key = (h.old_start(), h.new_start());
+                if last_hunk_start != Some(hunk_key) {
+                    last_hunk_start = Some(hunk_key);
+                    if let Some(file) = current_file.as_mut() {
+                        if let Some(prev_hunk) = current_hunk.take() {
+                            file.hunks.push(prev_hunk);
+                        }
+                        let header = format!(
+                            "@@ -{},{} +{},{} @@",
+                            h.old_start(), h.old_lines(),
+                            h.new_start(), h.new_lines()
+                        );
+                        current_hunk = Some(Hunk {
+                            header,
+                            old_start: h.old_start(),
+                            old_lines: h.old_lines(),
+                            new_start: h.new_start(),
+                            new_lines: h.new_lines(),
+                            lines: Vec::new(),
+                        });
+                    }
+                }
+            }
+
+            // Add line to current hunk
+            if let Some(hunk) = current_hunk.as_mut() {
+                let content = String::from_utf8_lossy(line.content()).to_string();
+                let line_type = match line.origin() {
+                    '+' => LineType::Addition,
+                    '-' => LineType::Deletion,
+                    _ => LineType::Context,
+                };
+                hunk.lines.push(DiffLine {
+                    line_type,
+                    content,
+                    old_lineno: line.old_lineno(),
+                    new_lineno: line.new_lineno(),
+                });
+            }
+
+            true
+        })?;
+
+        // Don't forget the last file/hunk
+        if let Some(mut file) = current_file {
+            if let Some(h) = current_hunk {
+                file.hunks.push(h);
+            }
+            files.push(file);
+        }
+
+        Ok(DiffInfo { files })
+    }
+
+    // Stash operations
+    pub fn stash_list(&mut self) -> Result<Vec<StashEntry>> {
+        let mut stashes = Vec::new();
+
+        self.repo.stash_foreach(|index, message, oid| {
+            stashes.push(StashEntry {
+                index,
+                message: message.to_string(),
+                id: oid.to_string(),
+            });
+            true
+        })?;
+
+        Ok(stashes)
+    }
+
+    pub fn stash_save(&mut self, message: Option<&str>) -> Result<()> {
+        let signature = self.repo.signature()?;
+        self.repo.stash_save(&signature, message.unwrap_or("WIP"), None)?;
+        Ok(())
+    }
+
+    pub fn stash_pop(&mut self, index: usize) -> Result<()> {
+        self.repo.stash_pop(index, None)?;
+        Ok(())
+    }
+
+    pub fn stash_apply(&mut self, index: usize) -> Result<()> {
+        self.repo.stash_apply(index, None)?;
+        Ok(())
+    }
+
+    pub fn stash_drop(&mut self, index: usize) -> Result<()> {
+        self.repo.stash_drop(index)?;
+        Ok(())
+    }
+
+    // Tag operations
+    pub fn tags(&self) -> Result<Vec<TagInfo>> {
+        let mut tags = Vec::new();
+
+        let tag_names = self.repo.tag_names(None)?;
+        for name in tag_names.iter().flatten() {
+            let refname = format!("refs/tags/{}", name);
+            if let Ok(reference) = self.repo.find_reference(&refname) {
+                let target = reference.target().map(|oid| oid.to_string()[..7].to_string());
+
+                // Try to get annotation
+                let message = if let Ok(obj) = reference.peel(git2::ObjectType::Tag) {
+                    if let Ok(tag) = obj.into_tag() {
+                        tag.message().map(|m| m.to_string())
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                };
+
+                let is_annotated = message.is_some();
+                tags.push(TagInfo {
+                    name: name.to_string(),
+                    message,
+                    target: target.unwrap_or_default(),
+                    is_annotated,
+                });
+            }
+        }
+
+        Ok(tags)
+    }
+
+    pub fn create_tag(&self, name: &str, message: Option<&str>) -> Result<()> {
+        let head = self.repo.head()?.peel_to_commit()?;
+
+        match message {
+            Some(msg) => {
+                let signature = self.repo.signature()?;
+                self.repo.tag(name, head.as_object(), &signature, msg, false)?;
+            }
+            None => {
+                self.repo.tag_lightweight(name, head.as_object(), false)?;
+            }
+        }
+
+        Ok(())
+    }
+
+    pub fn delete_tag(&self, name: &str) -> Result<()> {
+        self.repo.tag_delete(name)?;
+        Ok(())
+    }
+
+    // Merge operations
+    pub fn merge(&self, branch_name: &str) -> Result<MergeResult> {
+        let branch = self.repo.find_branch(branch_name, git2::BranchType::Local)?;
+        let annotated = self.repo.reference_to_annotated_commit(branch.get())?;
+
+        let (analysis, _) = self.repo.merge_analysis(&[&annotated])?;
+
+        if analysis.contains(git2::MergeAnalysis::ANALYSIS_UP_TO_DATE) {
+            return Ok(MergeResult::UpToDate);
+        }
+
+        if analysis.contains(git2::MergeAnalysis::ANALYSIS_FASTFORWARD) {
+            let target = self.repo.find_commit(annotated.id())?;
+            let mut head_ref = self.repo.head()?;
+            head_ref.set_target(target.id(), "merge: fast-forward")?;
+            self.repo.checkout_head(None)?;
+            return Ok(MergeResult::FastForward);
+        }
+
+        // Normal merge
+        self.repo.merge(&[&annotated], None, None)?;
+
+        if self.repo.index()?.has_conflicts() {
+            Ok(MergeResult::Conflict)
+        } else {
+            // Commit the merge
+            self.commit_merge(branch_name)?;
+            Ok(MergeResult::Merged)
+        }
+    }
+
+    fn commit_merge(&self, branch_name: &str) -> Result<()> {
+        let mut index = self.repo.index()?;
+        let oid = index.write_tree()?;
+        let tree = self.repo.find_tree(oid)?;
+
+        let head = self.repo.head()?.peel_to_commit()?;
+        let branch = self.repo.find_branch(branch_name, git2::BranchType::Local)?;
+        let branch_commit = branch.get().peel_to_commit()?;
+
+        let signature = self.repo.signature()?;
+        let message = format!("Merge branch '{}'", branch_name);
+
+        self.repo.commit(
+            Some("HEAD"),
+            &signature,
+            &signature,
+            &message,
+            &tree,
+            &[&head, &branch_commit],
+        )?;
+
+        self.repo.cleanup_state()?;
+        Ok(())
+    }
+
+    // Remote operations
+    pub fn remotes(&self) -> Result<Vec<String>> {
+        let remotes = self.repo.remotes()?;
+        Ok(remotes.iter().filter_map(|r| r.map(|s| s.to_string())).collect())
+    }
+
+    pub fn fetch(&self, remote_name: &str) -> Result<()> {
+        let mut remote = self.repo.find_remote(remote_name)?;
+        remote.fetch(&[] as &[&str], None, None)?;
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MergeResult {
+    UpToDate,
+    FastForward,
+    Merged,
+    Conflict,
+}

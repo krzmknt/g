@@ -1,0 +1,23 @@
+[package]
+name = "g"
+version = "0.1.0"
+edition = "2021"
+authors = ["krzmknt"]
+description = "A blazingly fast Git TUI"
+license = "MIT"
+repository = "https://github.com/krzmknt/g"
+
+[dependencies]
+git2 = "0.19"
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.59", features = ["Win32_System_Console", "Win32_Foundation"] }
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+strip = true

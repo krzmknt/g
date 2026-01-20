@@ -1,0 +1,333 @@
+use crate::git::{StatusEntry, FileStatus};
+use crate::tui::{Buffer, Rect, Style};
+use crate::config::Theme;
+use crate::widgets::{Block, Borders, ListState, Scrollbar, Widget};
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Section {
+    Staged,
+    Unstaged,
+    Untracked,
+}
+
+pub struct StatusView {
+    pub staged: Vec<StatusEntry>,
+    pub unstaged: Vec<StatusEntry>,
+    pub untracked: Vec<StatusEntry>,
+    pub section: Section,
+    pub list_state: ListState,
+    pub scroll: usize,
+}
+
+impl StatusView {
+    pub fn new() -> Self {
+        Self {
+            staged: Vec::new(),
+            unstaged: Vec::new(),
+            untracked: Vec::new(),
+            section: Section::Unstaged,
+            list_state: ListState::new().with_selected(Some(0)),
+            scroll: 0,
+        }
+    }
+
+    pub fn update(&mut self, entries: Vec<StatusEntry>) {
+        self.staged.clear();
+        self.unstaged.clear();
+        self.untracked.clear();
+
+        for entry in entries {
+            if entry.staged.is_changed() {
+                self.staged.push(entry.clone());
+            }
+            if entry.unstaged == FileStatus::Untracked {
+                self.untracked.push(entry);
+            } else if entry.unstaged.is_changed() {
+                self.unstaged.push(entry);
+            }
+        }
+
+        // Select first available section
+        if !self.staged.is_empty() {
+            self.section = Section::Staged;
+        } else if !self.unstaged.is_empty() {
+            self.section = Section::Unstaged;
+        } else if !self.untracked.is_empty() {
+            self.section = Section::Untracked;
+        }
+
+        self.list_state.select(Some(0));
+    }
+
+    pub fn current_items(&self) -> &[StatusEntry] {
+        match self.section {
+            Section::Staged => &self.staged,
+            Section::Unstaged => &self.unstaged,
+            Section::Untracked => &self.untracked,
+        }
+    }
+
+    pub fn selected_entry(&self) -> Option<&StatusEntry> {
+        self.list_state.selected()
+            .and_then(|i| self.current_items().get(i))
+    }
+
+    pub fn move_up(&mut self) {
+        if let Some(selected) = self.list_state.selected() {
+            if selected > 0 {
+                self.list_state.select(Some(selected - 1));
+            } else {
+                // Move to previous section
+                self.previous_section();
+            }
+        }
+    }
+
+    pub fn move_down(&mut self) {
+        let len = self.current_items().len();
+        if let Some(selected) = self.list_state.selected() {
+            if selected + 1 < len {
+                self.list_state.select(Some(selected + 1));
+            } else {
+                // Move to next section
+                self.next_section();
+            }
+        }
+    }
+
+    fn next_section(&mut self) {
+        match self.section {
+            Section::Staged if !self.unstaged.is_empty() => {
+                self.section = Section::Unstaged;
+                self.list_state.select(Some(0));
+            }
+            Section::Staged if !self.untracked.is_empty() => {
+                self.section = Section::Untracked;
+                self.list_state.select(Some(0));
+            }
+            Section::Unstaged if !self.untracked.is_empty() => {
+                self.section = Section::Untracked;
+                self.list_state.select(Some(0));
+            }
+            // Wrap around: from last section back to first
+            Section::Untracked if !self.staged.is_empty() => {
+                self.section = Section::Staged;
+                self.list_state.select(Some(0));
+            }
+            Section::Untracked if !self.unstaged.is_empty() => {
+                self.section = Section::Unstaged;
+                self.list_state.select(Some(0));
+            }
+            Section::Unstaged if !self.staged.is_empty() => {
+                self.section = Section::Staged;
+                self.list_state.select(Some(0));
+            }
+            _ => {
+                // Wrap within same section
+                self.list_state.select(Some(0));
+            }
+        }
+    }
+
+    fn previous_section(&mut self) {
+        match self.section {
+            Section::Untracked if !self.unstaged.is_empty() => {
+                self.section = Section::Unstaged;
+                self.list_state.select(Some(self.unstaged.len().saturating_sub(1)));
+            }
+            Section::Untracked if !self.staged.is_empty() => {
+                self.section = Section::Staged;
+                self.list_state.select(Some(self.staged.len().saturating_sub(1)));
+            }
+            Section::Unstaged if !self.staged.is_empty() => {
+                self.section = Section::Staged;
+                self.list_state.select(Some(self.staged.len().saturating_sub(1)));
+            }
+            // Wrap around: from first section back to last
+            Section::Staged if !self.untracked.is_empty() => {
+                self.section = Section::Untracked;
+                self.list_state.select(Some(self.untracked.len().saturating_sub(1)));
+            }
+            Section::Staged if !self.unstaged.is_empty() => {
+                self.section = Section::Unstaged;
+                self.list_state.select(Some(self.unstaged.len().saturating_sub(1)));
+            }
+            Section::Unstaged if !self.untracked.is_empty() => {
+                self.section = Section::Untracked;
+                self.list_state.select(Some(self.untracked.len().saturating_sub(1)));
+            }
+            _ => {
+                // Wrap within same section
+                let len = self.current_items().len();
+                if len > 0 {
+                    self.list_state.select(Some(len - 1));
+                }
+            }
+        }
+    }
+
+    pub fn total_items(&self) -> usize {
+        // Count all items including section headers
+        let mut total = 0;
+        if !self.staged.is_empty() {
+            total += 1 + self.staged.len(); // header + items
+        }
+        if !self.unstaged.is_empty() {
+            total += 1 + self.unstaged.len();
+        }
+        if !self.untracked.is_empty() {
+            total += 1 + self.untracked.len();
+        }
+        total
+    }
+
+    pub fn ensure_visible(&mut self, visible_height: usize) {
+        // Get the absolute position of the selected item
+        let selected_abs = self.get_absolute_position();
+
+        if selected_abs < self.scroll {
+            self.scroll = selected_abs;
+        } else if selected_abs >= self.scroll + visible_height {
+            self.scroll = selected_abs.saturating_sub(visible_height - 1);
+        }
+    }
+
+    fn get_absolute_position(&self) -> usize {
+        let selected = self.list_state.selected().unwrap_or(0);
+        let mut pos = 0;
+
+        match self.section {
+            Section::Staged => {
+                pos += 1; // header
+                pos += selected;
+            }
+            Section::Unstaged => {
+                if !self.staged.is_empty() {
+                    pos += 1 + self.staged.len();
+                }
+                pos += 1; // header
+                pos += selected;
+            }
+            Section::Untracked => {
+                if !self.staged.is_empty() {
+                    pos += 1 + self.staged.len();
+                }
+                if !self.unstaged.is_empty() {
+                    pos += 1 + self.unstaged.len();
+                }
+                pos += 1; // header
+                pos += selected;
+            }
+        }
+        pos
+    }
+
+    pub fn render(&mut self, area: Rect, buf: &mut Buffer, theme: &Theme, focused: bool) {
+        let border_color = if focused { theme.border_focused } else { theme.border };
+
+        let block = Block::new()
+            .title(" Status ")
+            .borders(Borders::ALL)
+            .border_style(Style::new().fg(border_color));
+
+        let inner = block.inner(area);
+        block.render(area, buf);
+
+        if inner.height < 3 {
+            return;
+        }
+
+        let visible_height = inner.height as usize;
+        self.ensure_visible(visible_height);
+
+        // Build all lines
+        let mut lines: Vec<(String, Style, bool)> = Vec::new(); // (text, style, is_selected)
+
+        // Staged section
+        if !self.staged.is_empty() {
+            let header = format!("Staged ({})", self.staged.len());
+            lines.push((header, Style::new().bold().fg(theme.foreground), false));
+
+            for (i, entry) in self.staged.iter().enumerate() {
+                let is_selected = self.section == Section::Staged && self.list_state.selected() == Some(i);
+                let status_char = entry.staged.symbol();
+                let status_color = Self::status_color(status_char, theme);
+                let line = format!("  {}  {}", status_char, entry.path);
+                let style = if is_selected {
+                    Style::new().fg(theme.selection_text).bg(theme.selection)
+                } else {
+                    Style::new().fg(status_color)
+                };
+                lines.push((line, style, is_selected));
+            }
+        }
+
+        // Unstaged section
+        if !self.unstaged.is_empty() {
+            let header = format!("Unstaged ({})", self.unstaged.len());
+            lines.push((header, Style::new().bold().fg(theme.foreground), false));
+
+            for (i, entry) in self.unstaged.iter().enumerate() {
+                let is_selected = self.section == Section::Unstaged && self.list_state.selected() == Some(i);
+                let status_char = entry.unstaged.symbol();
+                let status_color = Self::status_color(status_char, theme);
+                let line = format!("  {}  {}", status_char, entry.path);
+                let style = if is_selected {
+                    Style::new().fg(theme.selection_text).bg(theme.selection)
+                } else {
+                    Style::new().fg(status_color)
+                };
+                lines.push((line, style, is_selected));
+            }
+        }
+
+        // Untracked section
+        if !self.untracked.is_empty() {
+            let header = format!("Untracked ({})", self.untracked.len());
+            lines.push((header, Style::new().bold().fg(theme.foreground), false));
+
+            for (i, entry) in self.untracked.iter().enumerate() {
+                let is_selected = self.section == Section::Untracked && self.list_state.selected() == Some(i);
+                let status_char = entry.unstaged.symbol();
+                let status_color = Self::status_color(status_char, theme);
+                let line = format!("  {}  {}", status_char, entry.path);
+                let style = if is_selected {
+                    Style::new().fg(theme.selection_text).bg(theme.selection)
+                } else {
+                    Style::new().fg(status_color)
+                };
+                lines.push((line, style, is_selected));
+            }
+        }
+
+        // Render visible lines
+        let content_width = inner.width.saturating_sub(1); // Leave space for scrollbar
+        for (i, (line, style, _)) in lines.iter().skip(self.scroll).take(visible_height).enumerate() {
+            let y = inner.y + i as u16;
+            buf.set_string_truncated(inner.x, y, line, content_width, *style);
+        }
+
+        // Render scrollbar
+        let scrollbar = Scrollbar::new(lines.len(), visible_height, self.scroll);
+        let scrollbar_area = Rect::new(inner.x + inner.width - 1, inner.y, 1, inner.height);
+        scrollbar.render(scrollbar_area, buf, Style::new().fg(theme.border));
+    }
+
+    fn status_color(status_char: char, theme: &Theme) -> crate::tui::Color {
+        match status_char {
+            'M' => theme.unstaged,
+            'A' => theme.staged,
+            'D' => theme.diff_remove,
+            '?' => theme.untracked,
+            _ => theme.foreground,
+        }
+    }
+
+    pub fn staged_count(&self) -> usize {
+        self.staged.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.staged.is_empty() && self.unstaged.is_empty() && self.untracked.is_empty()
+    }
+}
