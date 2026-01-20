@@ -1,16 +1,15 @@
 mod parser;
 mod theme;
 
-pub use theme::{Theme, ThemeName};
+pub use theme::Theme;
 
 use std::path::PathBuf;
 use std::collections::HashMap;
-use crate::error::{Error, Result};
-use crate::tui::Color;
+use crate::error::Result;
 
 #[derive(Debug, Clone)]
 pub struct Config {
-    pub theme: ThemeName,
+    pub theme: Theme,
     pub show_line_numbers: bool,
     pub diff_context_lines: u32,
     pub max_commits: usize,
@@ -18,7 +17,6 @@ pub struct Config {
     pub auto_refresh: u32,
     pub confirm_destructive: bool,
     pub editor: Option<String>,
-    pub themes: Themes,
     pub keybindings: HashMap<String, Vec<String>>,
     pub git: GitConfig,
 }
@@ -31,12 +29,6 @@ pub enum DateFormat {
 }
 
 #[derive(Debug, Clone)]
-pub struct Themes {
-    pub dark: Theme,
-    pub light: Theme,
-}
-
-#[derive(Debug, Clone)]
 pub struct GitConfig {
     pub default_remote: String,
     pub default_branch: String,
@@ -46,7 +38,7 @@ pub struct GitConfig {
 impl Default for Config {
     fn default() -> Self {
         Self {
-            theme: ThemeName::Dark,
+            theme: Theme::default(),
             show_line_numbers: true,
             diff_context_lines: 3,
             max_commits: 1000,
@@ -54,18 +46,8 @@ impl Default for Config {
             auto_refresh: 0,
             confirm_destructive: true,
             editor: None,
-            themes: Themes::default(),
             keybindings: HashMap::new(),
             git: GitConfig::default(),
-        }
-    }
-}
-
-impl Default for Themes {
-    fn default() -> Self {
-        Self {
-            dark: Theme::dark(),
-            light: Theme::light(),
         }
     }
 }
@@ -110,16 +92,6 @@ impl Config {
         let toml = parser::parse(content)?;
         let mut config = Self::default();
 
-        if let Some(value) = toml.get("theme") {
-            if let parser::Value::String(s) = value {
-                config.theme = match s.as_str() {
-                    "dark" => ThemeName::Dark,
-                    "light" => ThemeName::Light,
-                    _ => ThemeName::Dark,
-                };
-            }
-        }
-
         if let Some(parser::Value::Boolean(b)) = toml.get("show_line_numbers") {
             config.show_line_numbers = *b;
         }
@@ -157,17 +129,7 @@ impl Config {
     }
 
     pub fn current_theme(&self) -> &Theme {
-        match self.theme {
-            ThemeName::Dark => &self.themes.dark,
-            ThemeName::Light => &self.themes.light,
-        }
-    }
-
-    pub fn toggle_theme(&mut self) {
-        self.theme = match self.theme {
-            ThemeName::Dark => ThemeName::Light,
-            ThemeName::Light => ThemeName::Dark,
-        };
+        &self.theme
     }
 
     pub fn editor(&self) -> String {

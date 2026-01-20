@@ -164,9 +164,6 @@ impl App {
         self.terminal.draw(|buf| {
             let area = buf.area;
 
-            // Clear with background color
-            buf.set_style(area, Style::new().bg(theme.background));
-
             // Layout
             let (header, rest) = area.split_horizontal(1);
             let (main, footer) = rest.split_horizontal(rest.height.saturating_sub(3));
@@ -273,7 +270,6 @@ impl App {
                     ("Enter", "select"),
                     ("/", "search"),
                     ("r", "refresh"),
-                    ("T", "theme"),
                 ];
                 Self::render_command_line(buf, area.x + 1, help_y1, &global_cmds, key_style, desc_style, sep_style, area.width.saturating_sub(2));
 
@@ -542,12 +538,6 @@ impl App {
             KeyCode::Char('r') => {
                 self.refresh_all()?;
                 self.message = Some("Refreshed".to_string());
-            }
-
-            // Theme toggle
-            KeyCode::Char('T') => {
-                self.config.toggle_theme();
-                self.message = Some(format!("Theme: {:?}", self.config.theme));
             }
 
             _ => {}
