@@ -17,6 +17,12 @@ pub struct Theme {
     pub branch_current: Color,
     pub branch_local: Color,
     pub branch_remote: Color,
+    // Commit-specific colors
+    pub commit_hash: Color,
+    pub commit_author: Color,
+    pub commit_message: Color,
+    pub commit_time: Color,
+    pub commit_refs: Color,
 }
 
 impl Theme {
@@ -37,6 +43,12 @@ impl Theme {
             branch_current: Color::Rgb(166, 227, 161), // #a6e3a1
             branch_local: Color::Rgb(137, 180, 250),  // #89b4fa
             branch_remote: Color::Rgb(203, 166, 247), // #cba6f7
+            // Commit-specific colors
+            commit_hash: Color::Rgb(249, 226, 175),   // #f9e2af (yellow)
+            commit_author: Color::Rgb(137, 180, 250), // #89b4fa (blue)
+            commit_message: Color::Rgb(205, 214, 244), // #cdd6f4 (foreground)
+            commit_time: Color::Rgb(108, 112, 134),   // #6c7086 (dim)
+            commit_refs: Color::Rgb(166, 227, 161),   // #a6e3a1 (green)
         }
     }
 }

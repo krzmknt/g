@@ -266,27 +266,24 @@ impl CommitsView {
             let is_selected = self.selected == self.offset + i;
             let is_search_match = self.search_results.contains(&(self.offset + i));
 
-            let style = if is_selected && focused {
-                Style::new().fg(theme.selection_text).bg(theme.selection)
-            } else if is_search_match {
-                Style::new().fg(theme.diff_hunk)
-            } else {
-                Style::new().fg(theme.foreground)
-            };
-
             // Fill full line width when selected and focused
             if is_selected && focused {
                 let blank_line = " ".repeat(content_width as usize);
-                buf.set_string(inner.x, y, &blank_line, style);
+                buf.set_string(inner.x, y, &blank_line, Style::new().bg(theme.selection));
             }
 
-            // Build full line: hash + message + time
+            // Build segments: (text, color)
             let time_str = commit.relative_time();
-            let line = format!("{} {} {}", commit.short_id, commit.message, time_str);
+            let segments: Vec<(&str, crate::tui::Color)> = vec![
+                (&commit.short_id, theme.commit_hash),
+                (" ", theme.foreground),
+                (&commit.message, theme.commit_message),
+                (" ", theme.foreground),
+                (&time_str, theme.commit_time),
+            ];
 
-            // Apply horizontal scroll
-            let display_line: String = line.chars().skip(self.h_offset).collect();
-            buf.set_string_truncated(inner.x, y, &display_line, content_width, style);
+            // Render with colors (respecting h_offset and selection)
+            self.render_colored_line(buf, inner.x, y, content_width, &segments, is_selected && focused, is_search_match, theme);
         }
     }
 
@@ -296,21 +293,13 @@ impl CommitsView {
             let is_selected = self.selected == self.offset + i;
             let is_search_match = self.search_results.contains(&(self.offset + i));
 
-            let style = if is_selected && focused {
-                Style::new().fg(theme.selection_text).bg(theme.selection)
-            } else if is_search_match {
-                Style::new().fg(theme.diff_hunk)
-            } else {
-                Style::new().fg(theme.foreground)
-            };
-
             // Fill full line width when selected and focused
             if is_selected && focused {
                 let blank_line = " ".repeat(content_width as usize);
-                buf.set_string(inner.x, y, &blank_line, style);
+                buf.set_string(inner.x, y, &blank_line, Style::new().bg(theme.selection));
             }
 
-            // Build full line: hash + refs + author + message + time
+            // Build segments: hash + refs + author + message + time
             let refs_str = if !commit.refs.is_empty() {
                 format!("({}) ", commit.refs.join(", "))
             } else {
@@ -318,11 +307,25 @@ impl CommitsView {
             };
             let author_truncated: String = commit.author.chars().take(15).collect();
             let time_str = commit.relative_time();
-            let line = format!("{} {}{} {} {}", commit.short_id, refs_str, author_truncated, commit.message, time_str);
 
-            // Apply horizontal scroll
-            let display_line: String = line.chars().skip(self.h_offset).collect();
-            buf.set_string_truncated(inner.x, y, &display_line, content_width, style);
+            // Use owned strings for segments that need formatting
+            let segments_owned: Vec<(String, crate::tui::Color)> = vec![
+                (commit.short_id.clone(), theme.commit_hash),
+                (" ".to_string(), theme.foreground),
+                (refs_str, theme.commit_refs),
+                (author_truncated, theme.commit_author),
+                (" ".to_string(), theme.foreground),
+                (commit.message.clone(), theme.commit_message),
+                (" ".to_string(), theme.foreground),
+                (time_str, theme.commit_time),
+            ];
+
+            // Convert to references for rendering
+            let segments: Vec<(&str, crate::tui::Color)> = segments_owned.iter()
+                .map(|(s, c)| (s.as_str(), *c))
+                .collect();
+
+            self.render_colored_line(buf, inner.x, y, content_width, &segments, is_selected && focused, is_search_match, theme);
         }
     }
 
@@ -340,31 +343,78 @@ impl CommitsView {
             let is_selected = self.selected == self.offset + i;
             let is_search_match = self.search_results.contains(&(self.offset + i));
 
-            let base_style = if is_selected && focused {
-                Style::new().fg(theme.selection_text).bg(theme.selection)
-            } else if is_search_match {
-                Style::new().fg(theme.diff_hunk)
-            } else {
-                Style::new().fg(theme.foreground)
-            };
-
             // Fill full line width when selected and focused
             if is_selected && focused {
                 let blank_line = " ".repeat(content_width as usize);
-                buf.set_string(inner.x, y, &blank_line, base_style);
+                buf.set_string(inner.x, y, &blank_line, Style::new().bg(theme.selection));
             }
 
-            // Build full line: graph + refs + hash + author + message
+            // Build segments: graph + refs + hash + author + message
             let refs_str = if !commit.refs.is_empty() {
                 format!("({}) ", commit.refs.join(", "))
             } else {
                 String::new()
             };
-            let line = format!("{}{}{} {} - {}", commit.graph_chars, refs_str, commit.short_id, commit.author, commit.message);
 
-            // Apply horizontal scroll
-            let display_line: String = line.chars().skip(self.h_offset).collect();
-            buf.set_string_truncated(inner.x, y, &display_line, content_width, base_style);
+            let segments_owned: Vec<(String, crate::tui::Color)> = vec![
+                (commit.graph_chars.clone(), theme.diff_hunk),
+                (refs_str, theme.commit_refs),
+                (commit.short_id.clone(), theme.commit_hash),
+                (" ".to_string(), theme.foreground),
+                (commit.author.clone(), theme.commit_author),
+                (" - ".to_string(), theme.foreground),
+                (commit.message.clone(), theme.commit_message),
+            ];
+
+            let segments: Vec<(&str, crate::tui::Color)> = segments_owned.iter()
+                .map(|(s, c)| (s.as_str(), *c))
+                .collect();
+
+            self.render_colored_line(buf, inner.x, y, content_width, &segments, is_selected && focused, is_search_match, theme);
+        }
+    }
+
+    /// Render a line with multiple colored segments, respecting horizontal scroll
+    fn render_colored_line(
+        &self,
+        buf: &mut Buffer,
+        x: u16,
+        y: u16,
+        width: u16,
+        segments: &[(&str, crate::tui::Color)],
+        is_selected: bool,
+        is_search_match: bool,
+        theme: &Theme,
+    ) {
+        let mut current_x = x;
+        let mut chars_skipped = 0;
+        let max_x = x + width;
+
+        for (text, color) in segments {
+            for ch in text.chars() {
+                // Skip characters for horizontal scroll
+                if chars_skipped < self.h_offset {
+                    chars_skipped += 1;
+                    continue;
+                }
+
+                // Stop if we've exceeded the width
+                if current_x >= max_x {
+                    return;
+                }
+
+                // Determine style based on selection state
+                let style = if is_selected {
+                    Style::new().fg(theme.selection_text).bg(theme.selection)
+                } else if is_search_match {
+                    Style::new().fg(theme.diff_hunk)
+                } else {
+                    Style::new().fg(*color)
+                };
+
+                buf.set_string(current_x, y, &ch.to_string(), style);
+                current_x += 1;
+            }
         }
     }
 }
