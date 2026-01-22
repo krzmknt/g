@@ -1,6 +1,6 @@
 use std::io::Read;
 use std::time::Duration;
-use super::event::{Event, KeyEvent, KeyCode, Modifiers};
+use super::event::{Event, KeyEvent, KeyCode, Modifiers, MouseEvent, MouseEventKind, MouseButton};
 use crate::error::Result;
 
 pub struct EventReader {
@@ -17,6 +17,18 @@ impl EventReader {
     }
 
     pub fn read_event(&mut self, timeout: Duration) -> Result<Event> {
+        // If we have bytes in the buffer, try to parse them first
+        if self.buffer_len > 0 {
+            let (event, consumed) = self.parse_event();
+            if consumed > 0 {
+                self.buffer.copy_within(consumed..self.buffer_len, 0);
+                self.buffer_len -= consumed;
+                if !matches!(event, Event::None) {
+                    return Ok(event);
+                }
+            }
+        }
+
         // Try to read from stdin with timeout
         if !self.poll_stdin(timeout)? {
             return Ok(Event::None);
@@ -164,6 +176,16 @@ impl EventReader {
             return (Event::Key(KeyEvent::new(KeyCode::Escape, Modifiers::NONE)), 1);
         }
 
+        // Check for SGR mouse encoding: ESC [ < Cb ; Cx ; Cy M/m
+        if bytes[0] == b'<' {
+            return self.parse_sgr_mouse(&bytes[1..]);
+        }
+
+        // Check for normal mouse encoding: ESC [ M Cb Cx Cy
+        if bytes[0] == b'M' && bytes.len() >= 4 {
+            return self.parse_normal_mouse(&bytes[1..]);
+        }
+
         // Simple arrow keys and navigation
         match bytes[0] {
             b'A' => return (Event::Key(KeyEvent::new(KeyCode::Up, Modifiers::NONE)), 3),
@@ -230,6 +252,131 @@ impl EventReader {
         }
 
         (Event::None, 2)
+    }
+
+    fn parse_sgr_mouse(&self, bytes: &[u8]) -> (Event, usize) {
+        // SGR mouse: ESC [ < Cb ; Cx ; Cy M/m
+        // Format: <button_code;x;y[Mm]
+        // M = button press, m = button release
+
+        let mut nums: [u32; 3] = [0, 0, 0];
+        let mut num_idx = 0;
+        let mut i = 0;
+
+        while i < bytes.len() && num_idx < 3 {
+            match bytes[i] {
+                b'0'..=b'9' => {
+                    nums[num_idx] = nums[num_idx] * 10 + (bytes[i] - b'0') as u32;
+                }
+                b';' => {
+                    num_idx += 1;
+                }
+                b'M' | b'm' => {
+                    let is_release = bytes[i] == b'm';
+                    let cb = nums[0];
+                    let cx = nums[1].saturating_sub(1) as u16; // 1-based to 0-based
+                    let cy = nums[2].saturating_sub(1) as u16;
+
+                    let button = match cb & 0b11 {
+                        0 => MouseButton::Left,
+                        1 => MouseButton::Middle,
+                        2 => MouseButton::Right,
+                        _ => MouseButton::Left,
+                    };
+
+                    let is_drag = (cb & 32) != 0;
+                    let is_scroll = (cb & 64) != 0;
+
+                    let kind = if is_scroll {
+                        if (cb & 0b1) == 0 {
+                            MouseEventKind::ScrollUp
+                        } else {
+                            MouseEventKind::ScrollDown
+                        }
+                    } else if is_release {
+                        MouseEventKind::Up(button)
+                    } else if is_drag {
+                        MouseEventKind::Drag(button)
+                    } else {
+                        MouseEventKind::Down(button)
+                    };
+
+                    let event = MouseEvent {
+                        kind,
+                        column: cx,
+                        row: cy,
+                    };
+                    // Total consumed: ESC [ < (3) + parsed bytes + terminator
+                    return (Event::Mouse(event), 3 + i + 1);
+                }
+                _ => {
+                    // Invalid character in SGR sequence - skip the entire sequence
+                    // Find the next M or m terminator to consume all garbage
+                    while i < bytes.len() {
+                        if bytes[i] == b'M' || bytes[i] == b'm' {
+                            return (Event::None, 3 + i + 1);
+                        }
+                        i += 1;
+                    }
+                    // No terminator found - sequence is incomplete, wait for more bytes
+                    return (Event::None, 0);
+                }
+            }
+            i += 1;
+        }
+
+        // Sequence is incomplete (no M/m terminator found yet)
+        // Don't consume anything, wait for more bytes
+        (Event::None, 0)
+    }
+
+    fn parse_normal_mouse(&self, bytes: &[u8]) -> (Event, usize) {
+        // Normal mouse: ESC [ M Cb Cx Cy (each is a single byte + 32 offset)
+        if bytes.len() < 3 {
+            return (Event::None, 3);
+        }
+
+        let cb = bytes[0].wrapping_sub(32);
+        let cx = bytes[1].wrapping_sub(32).saturating_sub(1) as u16;
+        let cy = bytes[2].wrapping_sub(32).saturating_sub(1) as u16;
+
+        let button = match cb & 0b11 {
+            0 => MouseButton::Left,
+            1 => MouseButton::Middle,
+            2 => MouseButton::Right,
+            3 => {
+                // Button release (no specific button in normal mode)
+                let event = MouseEvent {
+                    kind: MouseEventKind::Up(MouseButton::Left),
+                    column: cx,
+                    row: cy,
+                };
+                return (Event::Mouse(event), 6);
+            }
+            _ => MouseButton::Left,
+        };
+
+        let is_drag = (cb & 32) != 0;
+        let is_scroll = (cb & 64) != 0;
+
+        let kind = if is_scroll {
+            if (cb & 0b1) == 0 {
+                MouseEventKind::ScrollUp
+            } else {
+                MouseEventKind::ScrollDown
+            }
+        } else if is_drag {
+            MouseEventKind::Drag(button)
+        } else {
+            MouseEventKind::Down(button)
+        };
+
+        let event = MouseEvent {
+            kind,
+            column: cx,
+            row: cy,
+        };
+        (Event::Mouse(event), 6)
     }
 
     fn parse_ss3_sequence(&self, bytes: &[u8]) -> (Event, usize) {

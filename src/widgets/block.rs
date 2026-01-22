@@ -81,13 +81,13 @@ impl Widget for Block<'_> {
             return;
         }
 
-        // Box drawing characters
+        // Box drawing characters (rounded corners)
         const HORIZONTAL: &str = "─";
         const VERTICAL: &str = "│";
-        const TOP_LEFT: &str = "┌";
-        const TOP_RIGHT: &str = "┐";
-        const BOTTOM_LEFT: &str = "└";
-        const BOTTOM_RIGHT: &str = "┘";
+        const TOP_LEFT: &str = "╭";
+        const TOP_RIGHT: &str = "╮";
+        const BOTTOM_LEFT: &str = "╰";
+        const BOTTOM_RIGHT: &str = "╯";
 
         // Draw borders
         if self.borders.contains(Borders::TOP) {

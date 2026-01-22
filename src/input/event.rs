@@ -1,8 +1,33 @@
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Event {
     Key(KeyEvent),
+    Mouse(MouseEvent),
     Resize(u16, u16),
     None,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct MouseEvent {
+    pub kind: MouseEventKind,
+    pub column: u16,
+    pub row: u16,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MouseEventKind {
+    Down(MouseButton),
+    Up(MouseButton),
+    Drag(MouseButton),
+    Moved,
+    ScrollUp,
+    ScrollDown,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MouseButton {
+    Left,
+    Right,
+    Middle,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]

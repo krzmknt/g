@@ -1,7 +1,9 @@
 mod parser;
 mod theme;
+mod layout;
 
 pub use theme::Theme;
+pub use layout::{LayoutConfig, Column, PanelHeight};
 
 use std::path::PathBuf;
 use std::collections::HashMap;
@@ -19,6 +21,7 @@ pub struct Config {
     pub editor: Option<String>,
     pub keybindings: HashMap<String, Vec<String>>,
     pub git: GitConfig,
+    pub layout: LayoutConfig,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -48,6 +51,7 @@ impl Default for Config {
             editor: None,
             keybindings: HashMap::new(),
             git: GitConfig::default(),
+            layout: LayoutConfig::default(),
         }
     }
 }
@@ -124,6 +128,9 @@ impl Config {
         if let Some(parser::Value::String(s)) = toml.get("editor") {
             config.editor = Some(s.clone());
         }
+
+        // Parse layout config
+        config.layout = LayoutConfig::from_toml(&toml);
 
         Ok(config)
     }

@@ -223,7 +223,7 @@ impl StatusView {
     }
 
     pub fn render(&mut self, area: Rect, buf: &mut Buffer, theme: &Theme, focused: bool) {
-        let border_color = if focused { theme.border_focused } else { theme.border };
+        let border_color = if focused { theme.border_focused } else { theme.border_unfocused };
 
         let block = Block::new()
             .title(" Status ")
@@ -243,20 +243,19 @@ impl StatusView {
         // Build all lines
         let mut lines: Vec<(String, Style, bool)> = Vec::new(); // (text, style, is_selected)
 
-        // Staged section
+        // Staged section (always green)
         if !self.staged.is_empty() {
             let header = format!("Staged ({})", self.staged.len());
-            lines.push((header, Style::new().bold().fg(theme.foreground), false));
+            lines.push((header, Style::new().bold().fg(theme.staged), false));
 
             for (i, entry) in self.staged.iter().enumerate() {
                 let is_selected = self.section == Section::Staged && self.list_state.selected() == Some(i);
                 let status_char = entry.staged.symbol();
-                let status_color = Self::status_color(status_char, theme);
                 let line = format!("  {}  {}", status_char, entry.path);
                 let style = if is_selected {
                     Style::new().fg(theme.selection_text).bg(theme.selection)
                 } else {
-                    Style::new().fg(status_color)
+                    Style::new().fg(theme.staged)
                 };
                 lines.push((line, style, is_selected));
             }

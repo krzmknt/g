@@ -5,6 +5,7 @@ pub struct Theme {
     pub foreground: Color,
     pub border: Color,
     pub border_focused: Color,
+    pub border_unfocused: Color,
     pub selection: Color,
     pub selection_text: Color,
     pub diff_add: Color,
@@ -24,6 +25,7 @@ impl Theme {
             foreground: Color::Rgb(205, 214, 244),    // #cdd6f4
             border: Color::Rgb(108, 112, 134),        // #6c7086
             border_focused: Color::Rgb(137, 180, 250), // #89b4fa
+            border_unfocused: Color::Rgb(69, 71, 90), // #45475a (dimmer)
             selection: Color::Rgb(49, 50, 68),        // #313244
             selection_text: Color::Rgb(205, 214, 244), // #cdd6f4
             diff_add: Color::Rgb(166, 227, 161),      // #a6e3a1

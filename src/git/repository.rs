@@ -7,6 +7,12 @@ use super::status::{StatusEntry, FileStatus};
 use super::diff::{DiffInfo, FileDiff, Hunk, DiffLine, LineType};
 use super::stash::StashEntry;
 use super::tag::TagInfo;
+use super::worktree::WorktreeInfo;
+use super::submodule::SubmoduleInfo;
+use super::blame::{BlameInfo, BlameLine};
+use super::filetree::{FileTreeEntry, FileTreeStatus};
+use super::conflict::{ConflictEntry, ConflictType};
+use super::loggraph::GraphCommit;
 
 pub struct Repository {
     repo: Git2Repository,
@@ -603,6 +609,406 @@ impl Repository {
         remote.fetch(&[] as &[&str], None, None)?;
         Ok(())
     }
+
+    // Remote info
+    pub fn remote_info(&self) -> Result<Vec<RemoteInfo>> {
+        let mut remotes = Vec::new();
+        for name in self.repo.remotes()?.iter().flatten() {
+            if let Ok(remote) = self.repo.find_remote(name) {
+                remotes.push(RemoteInfo {
+                    name: name.to_string(),
+                    url: remote.url().unwrap_or("").to_string(),
+                    push_url: remote.pushurl().map(|s| s.to_string()),
+                });
+            }
+        }
+        Ok(remotes)
+    }
+
+    // Worktree operations
+    pub fn worktrees(&self) -> Result<Vec<WorktreeInfo>> {
+        let mut worktrees = Vec::new();
+
+        // Main worktree
+        let main_path = self.path.to_string_lossy().to_string();
+        let main_head = self.head_name()?.unwrap_or_else(|| self.head_commit_short().unwrap_or_default());
+        worktrees.push(WorktreeInfo {
+            name: "main".to_string(),
+            path: main_path,
+            head: main_head,
+            is_main: true,
+            is_locked: false,
+        });
+
+        // Additional worktrees
+        if let Ok(wts) = self.repo.worktrees() {
+            for name in wts.iter().flatten() {
+                if let Ok(wt) = self.repo.find_worktree(name) {
+                    let path = wt.path().to_string_lossy().to_string();
+                    let is_locked = wt.is_locked().is_ok();
+                    worktrees.push(WorktreeInfo {
+                        name: name.to_string(),
+                        path,
+                        head: String::new(), // Would need to open the worktree to get head
+                        is_main: false,
+                        is_locked,
+                    });
+                }
+            }
+        }
+
+        Ok(worktrees)
+    }
+
+    // Submodule operations
+    pub fn submodules(&self) -> Result<Vec<SubmoduleInfo>> {
+        let mut submodules = Vec::new();
+
+        for sm in self.repo.submodules()? {
+            let name = sm.name().unwrap_or("").to_string();
+            let path = sm.path().to_string_lossy().to_string();
+            let url = sm.url().unwrap_or("").to_string();
+            let head = sm.head_id().map(|oid| oid.to_string()[..7].to_string());
+
+            submodules.push(SubmoduleInfo {
+                name,
+                path,
+                url,
+                head,
+                is_initialized: sm.open().is_ok(),
+            });
+        }
+
+        Ok(submodules)
+    }
+
+    pub fn submodule_update(&self, name: &str) -> Result<()> {
+        let mut sm = self.repo.find_submodule(name)?;
+        sm.update(true, None)?;
+        Ok(())
+    }
+
+    // Blame operations
+    pub fn blame_file(&self, path: &str) -> Result<BlameInfo> {
+        let blame = self.repo.blame_file(Path::new(path), None)?;
+        let mut lines = Vec::new();
+
+        // Read the file content
+        let file_path = self.path.join(path);
+        let content = std::fs::read_to_string(&file_path).unwrap_or_default();
+
+        for (i, line_content) in content.lines().enumerate() {
+            let line_num = i + 1;
+            if let Some(hunk) = blame.get_line(line_num) {
+                let commit_id = hunk.final_commit_id().to_string();
+                let sig = hunk.final_signature();
+                let author = sig.name().unwrap_or("").to_string();
+                let time = sig.when();
+                let date = format_timestamp(time.seconds());
+
+                lines.push(BlameLine {
+                    line_number: line_num,
+                    commit_id: commit_id[..7.min(commit_id.len())].to_string(),
+                    author,
+                    date,
+                    content: line_content.to_string(),
+                });
+            }
+        }
+
+        Ok(BlameInfo {
+            path: path.to_string(),
+            lines,
+        })
+    }
+
+    // File tree operations
+    pub fn file_tree(&self) -> Result<Vec<FileTreeEntry>> {
+        let statuses = self.status()?;
+        let status_map: std::collections::HashMap<String, FileTreeStatus> = statuses
+            .iter()
+            .map(|e| {
+                let status = if e.unstaged == FileStatus::Untracked {
+                    FileTreeStatus::Untracked
+                } else if e.unstaged == FileStatus::Deleted || e.staged == FileStatus::Deleted {
+                    FileTreeStatus::Deleted
+                } else if e.staged == FileStatus::Added {
+                    FileTreeStatus::Added
+                } else if e.unstaged.is_changed() || e.staged.is_changed() {
+                    FileTreeStatus::Modified
+                } else {
+                    FileTreeStatus::Modified
+                };
+                (e.path.clone(), status)
+            })
+            .collect();
+
+        self.build_file_tree(&self.path, "", &status_map)
+    }
+
+    fn build_file_tree(
+        &self,
+        base_path: &Path,
+        relative_path: &str,
+        status_map: &std::collections::HashMap<String, FileTreeStatus>,
+    ) -> Result<Vec<FileTreeEntry>> {
+        let mut entries = Vec::new();
+        let full_path = if relative_path.is_empty() {
+            base_path.to_path_buf()
+        } else {
+            base_path.join(relative_path)
+        };
+
+        if let Ok(read_dir) = std::fs::read_dir(&full_path) {
+            for entry in read_dir.flatten() {
+                let name = entry.file_name().to_string_lossy().to_string();
+
+                // Skip hidden files and .git
+                if name.starts_with('.') {
+                    continue;
+                }
+
+                let entry_relative = if relative_path.is_empty() {
+                    name.clone()
+                } else {
+                    format!("{}/{}", relative_path, name)
+                };
+
+                if entry.path().is_dir() {
+                    let children = self.build_file_tree(base_path, &entry_relative, status_map)?;
+                    let mut dir_entry = FileTreeEntry::new_dir(name, entry_relative);
+                    dir_entry.children = children;
+                    entries.push(dir_entry);
+                } else {
+                    let status = status_map.get(&entry_relative).copied();
+                    entries.push(FileTreeEntry::new_file(name, entry_relative, status));
+                }
+            }
+        }
+
+        // Sort: directories first, then files, alphabetically
+        entries.sort_by(|a, b| {
+            match (a.is_dir, b.is_dir) {
+                (true, false) => std::cmp::Ordering::Less,
+                (false, true) => std::cmp::Ordering::Greater,
+                _ => a.name.to_lowercase().cmp(&b.name.to_lowercase()),
+            }
+        });
+
+        Ok(entries)
+    }
+
+    // Conflict operations
+    pub fn conflicts(&self) -> Result<Vec<ConflictEntry>> {
+        let index = self.repo.index()?;
+        let mut conflicts = Vec::new();
+
+        // Note: conflict detection is done below
+
+        // Alternative: check for conflict markers in files
+        for entry in index.conflicts()? {
+            if let Ok(conflict) = entry {
+                let path = conflict.our
+                    .as_ref()
+                    .or(conflict.their.as_ref())
+                    .or(conflict.ancestor.as_ref())
+                    .and_then(|e| std::str::from_utf8(&e.path).ok())
+                    .unwrap_or("")
+                    .to_string();
+
+                let conflict_type = match (&conflict.our, &conflict.their) {
+                    (Some(_), Some(_)) => ConflictType::BothModified,
+                    (Some(_), None) => ConflictType::DeletedByThem,
+                    (None, Some(_)) => ConflictType::DeletedByUs,
+                    (None, None) => ConflictType::BothModified,
+                };
+
+                conflicts.push(ConflictEntry {
+                    path,
+                    conflict_type,
+                    ours: None,
+                    theirs: None,
+                    ancestor: None,
+                });
+            }
+        }
+
+        Ok(conflicts)
+    }
+
+    pub fn resolve_conflict_ours(&self, path: &str) -> Result<()> {
+        // Checkout our version
+        let mut opts = git2::build::CheckoutBuilder::new();
+        opts.path(path);
+        opts.force();
+        self.repo.checkout_index(None, Some(&mut opts))?;
+
+        // Stage the file
+        self.stage_file(path)?;
+        Ok(())
+    }
+
+    pub fn resolve_conflict_theirs(&self, path: &str) -> Result<()> {
+        // For theirs, we need to use MERGE_HEAD
+        let merge_head = self.repo.find_reference("MERGE_HEAD")?;
+        let commit = merge_head.peel_to_commit()?;
+        let tree = commit.tree()?;
+
+        if let Some(entry) = tree.get_path(Path::new(path)).ok() {
+            let blob = self.repo.find_blob(entry.id())?;
+            std::fs::write(self.path.join(path), blob.content())?;
+        }
+
+        self.stage_file(path)?;
+        Ok(())
+    }
+
+    // Log graph operations
+    pub fn log_graph(&self, max_count: usize) -> Result<Vec<GraphCommit>> {
+        let mut revwalk = self.repo.revwalk()?;
+        revwalk.push_head()?;
+
+        // Also push all branches for a complete graph
+        for branch in self.repo.branches(None)? {
+            if let Ok((branch, _)) = branch {
+                if let Some(oid) = branch.get().target() {
+                    let _ = revwalk.push(oid);
+                }
+            }
+        }
+
+        revwalk.set_sorting(git2::Sort::TIME | git2::Sort::TOPOLOGICAL)?;
+
+        // Build ref map for labels
+        let mut ref_map: std::collections::HashMap<String, Vec<String>> = std::collections::HashMap::new();
+
+        // Add branches
+        for branch in self.repo.branches(None)? {
+            if let Ok((branch, _)) = branch {
+                if let Some(oid) = branch.get().target() {
+                    let name = branch.name().ok().flatten().unwrap_or("").to_string();
+                    ref_map.entry(oid.to_string()).or_default().push(name);
+                }
+            }
+        }
+
+        // Add tags
+        for tag_name in self.repo.tag_names(None)?.iter().flatten() {
+            let refname = format!("refs/tags/{}", tag_name);
+            if let Ok(reference) = self.repo.find_reference(&refname) {
+                if let Some(oid) = reference.target() {
+                    ref_map.entry(oid.to_string()).or_default().push(format!("tag: {}", tag_name));
+                }
+            }
+        }
+
+        let mut commits = Vec::new();
+        let mut graph_state: Vec<Option<git2::Oid>> = Vec::new();
+
+        for oid in revwalk.take(max_count) {
+            let oid = oid?;
+            let commit = self.repo.find_commit(oid)?;
+
+            // Build graph characters
+            let graph_chars = self.build_graph_line(&commit, &mut graph_state);
+
+            let parents: Vec<String> = commit.parents()
+                .map(|p| p.id().to_string()[..7].to_string())
+                .collect();
+
+            let refs = ref_map.get(&oid.to_string()).cloned().unwrap_or_default();
+
+            commits.push(GraphCommit {
+                id: oid.to_string(),
+                short_id: oid.to_string()[..7].to_string(),
+                message: commit.summary().unwrap_or("").to_string(),
+                author: commit.author().name().unwrap_or("").to_string(),
+                date: format_timestamp(commit.time().seconds()),
+                parents,
+                graph_chars,
+                refs,
+            });
+        }
+
+        Ok(commits)
+    }
+
+    fn build_graph_line(&self, commit: &git2::Commit, state: &mut Vec<Option<git2::Oid>>) -> String {
+        let oid = commit.id();
+        let parent_count = commit.parent_count();
+
+        // Find or add this commit to state
+        let col = state.iter().position(|s| *s == Some(oid))
+            .unwrap_or_else(|| {
+                // Find empty slot or add new
+                if let Some(pos) = state.iter().position(|s| s.is_none()) {
+                    state[pos] = Some(oid);
+                    pos
+                } else {
+                    state.push(Some(oid));
+                    state.len() - 1
+                }
+            });
+
+        let mut chars = String::new();
+
+        // Build the line
+        for (i, slot) in state.iter().enumerate() {
+            if i == col {
+                chars.push('*');
+            } else if slot.is_some() {
+                chars.push('|');
+            } else {
+                chars.push(' ');
+            }
+            chars.push(' ');
+        }
+
+        // Update state for parents
+        if parent_count == 0 {
+            state[col] = None;
+        } else if parent_count == 1 {
+            state[col] = Some(commit.parent_id(0).unwrap());
+        } else {
+            // Merge commit - first parent takes this slot
+            state[col] = Some(commit.parent_id(0).unwrap());
+            // Additional parents get new slots
+            for i in 1..parent_count {
+                if let Ok(parent_id) = commit.parent_id(i) {
+                    if let Some(pos) = state.iter().position(|s| s.is_none()) {
+                        state[pos] = Some(parent_id);
+                    } else {
+                        state.push(Some(parent_id));
+                    }
+                }
+            }
+        }
+
+        // Clean up empty trailing slots
+        while state.last() == Some(&None) {
+            state.pop();
+        }
+
+        chars
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct RemoteInfo {
+    pub name: String,
+    pub url: String,
+    pub push_url: Option<String>,
+}
+
+fn format_timestamp(timestamp: i64) -> String {
+    // Simple formatting - in a real app you'd use chrono
+    let secs = timestamp;
+    let days = secs / 86400;
+    let years = 1970 + days / 365;
+    let remaining_days = days % 365;
+    let months = remaining_days / 30 + 1;
+    let day = remaining_days % 30 + 1;
+    format!("{:04}-{:02}-{:02}", years, months, day)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

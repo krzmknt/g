@@ -37,14 +37,33 @@ impl Terminal {
         self.enable_raw_mode()?;
         self.enter_alternate_screen()?;
         self.hide_cursor()?;
+        self.enable_mouse()?;
         self.clear()?;
         Ok(())
     }
 
     pub fn restore(&mut self) -> Result<()> {
+        self.disable_mouse()?;
         self.show_cursor()?;
         self.leave_alternate_screen()?;
         self.disable_raw_mode()?;
+        Ok(())
+    }
+
+    fn enable_mouse(&mut self) -> Result<()> {
+        // Enable mouse tracking:
+        // 1000 = normal tracking (press/release)
+        // 1002 = button-event tracking (press/release/drag)
+        // 1003 = any-event tracking (all mouse events)
+        // 1006 = SGR extended mode (better coordinate handling)
+        write!(self.stdout, "\x1b[?1000h\x1b[?1002h\x1b[?1006h")?;
+        self.stdout.flush()?;
+        Ok(())
+    }
+
+    fn disable_mouse(&mut self) -> Result<()> {
+        write!(self.stdout, "\x1b[?1006l\x1b[?1002l\x1b[?1000l")?;
+        self.stdout.flush()?;
         Ok(())
     }
 
@@ -199,6 +218,17 @@ impl Terminal {
         &mut self.current_buffer
     }
 
+    /// Force a full redraw on the next draw call
+    pub fn force_full_redraw(&mut self) {
+        self.first_draw = true;
+    }
+
+    /// Invalidate the previous buffer to force diff to detect all changes
+    /// More efficient than full redraw for layout changes
+    pub fn invalidate_buffer(&mut self) {
+        self.previous_buffer.clear();
+    }
+
     pub fn draw<F>(&mut self, f: F) -> Result<()>
     where
         F: FnOnce(&mut Buffer),
@@ -229,8 +259,8 @@ impl Terminal {
     }
 
     fn flush_full(&mut self) -> Result<()> {
-        // Clear screen and move to home
-        write!(self.stdout, "\x1b[2J\x1b[H")?;
+        // Move to home position (no screen clear to avoid flicker)
+        write!(self.stdout, "\x1b[H")?;
 
         let mut last_style = Style::default();
         let area = self.current_buffer.area;

@@ -2,6 +2,8 @@
 #![allow(dead_code)]
 #![allow(unused_imports)]
 
+#[macro_use]
+mod logger;
 mod error;
 mod tui;
 mod input;
@@ -22,6 +24,8 @@ fn main() {
 }
 
 fn run() -> Result<()> {
+    logger::init();
+    info!("Application starting");
     let mut app = App::new()?;
     app.run()
 }

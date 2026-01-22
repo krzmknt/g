@@ -83,7 +83,7 @@ impl DiffView {
     }
 
     pub fn render(&mut self, area: Rect, buf: &mut Buffer, theme: &Theme, focused: bool) {
-        let border_color = if focused { theme.border_focused } else { theme.border };
+        let border_color = if focused { theme.border_focused } else { theme.border_unfocused };
 
         let mode_indicator = match self.mode {
             DiffMode::Inline => "inline",
