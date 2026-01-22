@@ -9,6 +9,9 @@ pub struct BranchesView {
     pub show_remote: bool,
     pub selected: usize,
     pub offset: usize,
+    pub h_offset: usize,
+    pub max_content_width: usize,
+    pub view_width: usize,
 }
 
 impl BranchesView {
@@ -19,7 +22,30 @@ impl BranchesView {
             show_remote: false,
             selected: 0,
             offset: 0,
+            h_offset: 0,
+            max_content_width: 0,
+            view_width: 0,
         }
+    }
+
+    pub fn can_scroll_left(&self) -> bool {
+        self.h_offset > 0
+    }
+
+    pub fn can_scroll_right(&self) -> bool {
+        if self.view_width == 0 {
+            return self.max_content_width > 0;
+        }
+        self.max_content_width > self.view_width &&
+            self.h_offset < self.max_content_width.saturating_sub(self.view_width)
+    }
+
+    pub fn scroll_left(&mut self) {
+        self.h_offset = self.h_offset.saturating_sub(4);
+    }
+
+    pub fn scroll_right(&mut self) {
+        self.h_offset += 4;
     }
 
     pub fn update(&mut self, branches: Vec<BranchInfo>) {
@@ -59,28 +85,26 @@ impl BranchesView {
     }
 
     pub fn move_up(&mut self) {
-        let len = self.visible_branches().len();
-        if len == 0 {
-            return;
-        }
         if self.selected > 0 {
             self.selected -= 1;
-        } else {
-            // Wrap to last item
-            self.selected = len - 1;
         }
     }
 
     pub fn move_down(&mut self) {
         let len = self.visible_branches().len();
-        if len == 0 {
-            return;
-        }
-        if self.selected + 1 < len {
+        if len > 0 && self.selected + 1 < len {
             self.selected += 1;
-        } else {
-            // Wrap to first item
-            self.selected = 0;
+        }
+    }
+
+    pub fn move_to_top(&mut self) {
+        self.selected = 0;
+    }
+
+    pub fn move_to_bottom(&mut self) {
+        let len = self.visible_branches().len();
+        if len > 0 {
+            self.selected = len - 1;
         }
     }
 
@@ -107,9 +131,36 @@ impl BranchesView {
             self.offset = self.selected - height + 1;
         }
 
-        let branches = self.visible_branches();
         let content_width = inner.width.saturating_sub(1); // Leave space for scrollbar
 
+        // Calculate max content width and store view width
+        self.view_width = content_width as usize;
+        {
+            let branches = self.visible_branches();
+            self.max_content_width = branches.iter().map(|branch| {
+                let indicator_width = 2; // "* " or "  "
+                let commit_width = branch.last_commit.short_id.len() + 1;
+                let name_width = branch.name.chars().count();
+                let ahead_behind_width = if branch.ahead > 0 || branch.behind > 0 {
+                    format!("  +{} -{}", branch.ahead, branch.behind).len()
+                } else {
+                    0
+                };
+                indicator_width + commit_width + name_width + ahead_behind_width
+            }).max().unwrap_or(0) + 2; // +2 for scrollbar (1) + margin (1)
+        }
+
+        // Clamp h_offset
+        if self.max_content_width <= self.view_width {
+            self.h_offset = 0;
+        } else {
+            let max_offset = self.max_content_width.saturating_sub(self.view_width);
+            if self.h_offset > max_offset {
+                self.h_offset = max_offset;
+            }
+        }
+
+        let branches = self.visible_branches();
         for (i, branch) in branches.iter().skip(self.offset).take(height).enumerate() {
             let y = inner.y + i as u16;
             let is_selected = self.selected == self.offset + i;
@@ -122,20 +173,28 @@ impl BranchesView {
                 BranchType::Remote => theme.branch_remote,
             };
 
-            let style = if is_selected {
+            let style = if is_selected && focused {
                 Style::new().fg(theme.selection_text).bg(theme.selection)
             } else {
                 Style::new().fg(name_color)
             };
 
-            // Format: * branch-name  +1 -2
-            let mut line = format!("{} {}", indicator, branch.name);
+            // Fill full line width when selected and focused
+            if is_selected && focused {
+                let blank_line = " ".repeat(content_width as usize);
+                buf.set_string(inner.x, y, &blank_line, style);
+            }
+
+            // Format: * commit_id branch-name  +1 -2
+            let mut line = format!("{} {} {}", indicator, branch.last_commit.short_id, branch.name);
 
             if branch.ahead > 0 || branch.behind > 0 {
                 line.push_str(&format!("  +{} -{}", branch.ahead, branch.behind));
             }
 
-            buf.set_string_truncated(inner.x, y, &line, content_width, style);
+            // Apply horizontal scroll
+            let display_line: String = line.chars().skip(self.h_offset).collect();
+            buf.set_string_truncated(inner.x, y, &display_line, content_width, style);
         }
 
         // Render scrollbar

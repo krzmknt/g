@@ -17,6 +17,9 @@ pub struct StatusView {
     pub section: Section,
     pub list_state: ListState,
     pub scroll: usize,
+    pub h_offset: usize,
+    pub max_content_width: usize,
+    pub view_width: usize,
 }
 
 impl StatusView {
@@ -28,7 +31,30 @@ impl StatusView {
             section: Section::Unstaged,
             list_state: ListState::new().with_selected(Some(0)),
             scroll: 0,
+            h_offset: 0,
+            max_content_width: 0,
+            view_width: 0,
         }
+    }
+
+    pub fn can_scroll_left(&self) -> bool {
+        self.h_offset > 0
+    }
+
+    pub fn can_scroll_right(&self) -> bool {
+        if self.view_width == 0 {
+            return self.max_content_width > 0;
+        }
+        self.max_content_width > self.view_width &&
+            self.h_offset < self.max_content_width.saturating_sub(self.view_width)
+    }
+
+    pub fn scroll_left(&mut self) {
+        self.h_offset = self.h_offset.saturating_sub(4);
+    }
+
+    pub fn scroll_right(&mut self) {
+        self.h_offset += 4;
     }
 
     pub fn update(&mut self, entries: Vec<StatusEntry>) {
@@ -77,7 +103,7 @@ impl StatusView {
             if selected > 0 {
                 self.list_state.select(Some(selected - 1));
             } else {
-                // Move to previous section
+                // At top of current section, try to move to previous section
                 self.previous_section();
             }
         }
@@ -89,9 +115,20 @@ impl StatusView {
             if selected + 1 < len {
                 self.list_state.select(Some(selected + 1));
             } else {
-                // Move to next section
+                // At bottom of current section, try to move to next section
                 self.next_section();
             }
+        }
+    }
+
+    pub fn move_to_top(&mut self) {
+        self.list_state.select(Some(0));
+    }
+
+    pub fn move_to_bottom(&mut self) {
+        let len = self.current_items().len();
+        if len > 0 {
+            self.list_state.select(Some(len - 1));
         }
     }
 
@@ -252,12 +289,12 @@ impl StatusView {
                 let is_selected = self.section == Section::Staged && self.list_state.selected() == Some(i);
                 let status_char = entry.staged.symbol();
                 let line = format!("  {}  {}", status_char, entry.path);
-                let style = if is_selected {
+                let style = if is_selected && focused {
                     Style::new().fg(theme.selection_text).bg(theme.selection)
                 } else {
                     Style::new().fg(theme.staged)
                 };
-                lines.push((line, style, is_selected));
+                lines.push((line, style, is_selected && focused));
             }
         }
 
@@ -271,12 +308,12 @@ impl StatusView {
                 let status_char = entry.unstaged.symbol();
                 let status_color = Self::status_color(status_char, theme);
                 let line = format!("  {}  {}", status_char, entry.path);
-                let style = if is_selected {
+                let style = if is_selected && focused {
                     Style::new().fg(theme.selection_text).bg(theme.selection)
                 } else {
                     Style::new().fg(status_color)
                 };
-                lines.push((line, style, is_selected));
+                lines.push((line, style, is_selected && focused));
             }
         }
 
@@ -290,20 +327,44 @@ impl StatusView {
                 let status_char = entry.unstaged.symbol();
                 let status_color = Self::status_color(status_char, theme);
                 let line = format!("  {}  {}", status_char, entry.path);
-                let style = if is_selected {
+                let style = if is_selected && focused {
                     Style::new().fg(theme.selection_text).bg(theme.selection)
                 } else {
                     Style::new().fg(status_color)
                 };
-                lines.push((line, style, is_selected));
+                lines.push((line, style, is_selected && focused));
             }
         }
 
         // Render visible lines
         let content_width = inner.width.saturating_sub(1); // Leave space for scrollbar
-        for (i, (line, style, _)) in lines.iter().skip(self.scroll).take(visible_height).enumerate() {
+
+        // Calculate max content width and store view width
+        self.view_width = content_width as usize;
+        self.max_content_width = lines.iter().map(|(line, _, _)| {
+            line.chars().count()
+        }).max().unwrap_or(0) + 2; // +2 for scrollbar (1) + margin (1)
+
+        // Clamp h_offset
+        if self.max_content_width <= self.view_width {
+            self.h_offset = 0;
+        } else {
+            let max_offset = self.max_content_width.saturating_sub(self.view_width);
+            if self.h_offset > max_offset {
+                self.h_offset = max_offset;
+            }
+        }
+
+        for (i, (line, style, is_highlighted)) in lines.iter().skip(self.scroll).take(visible_height).enumerate() {
             let y = inner.y + i as u16;
-            buf.set_string_truncated(inner.x, y, line, content_width, *style);
+            // Fill full line width with background color when highlighted
+            if *is_highlighted {
+                let blank_line = " ".repeat(content_width as usize);
+                buf.set_string(inner.x, y, &blank_line, *style);
+            }
+            // Apply horizontal scroll
+            let display_line: String = line.chars().skip(self.h_offset).collect();
+            buf.set_string_truncated(inner.x, y, &display_line, content_width, *style);
         }
 
         // Render scrollbar

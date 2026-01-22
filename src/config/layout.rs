@@ -23,32 +23,35 @@ pub struct LayoutConfig {
 impl Default for LayoutConfig {
     fn default() -> Self {
         // Default layout: 3 columns
-        // Left (25%): Status, Branches, Stash
-        // Middle (25%): Commits, Tags, Remotes
-        // Right (50%): Diff, LogGraph
+        // Left (20%): Files, Status, Branches, Stash, Tags, Worktrees, Submodules, Remotes
+        // Middle (30%): Commits, Conflicts
+        // Right (50%): Diff
         Self {
             columns: vec![
                 Column {
-                    width: 0.25,
+                    width: 0.20,
                     panels: vec![
-                        PanelHeight { panel: PanelType::Status, height: 0.40 },
-                        PanelHeight { panel: PanelType::Branches, height: 0.30 },
-                        PanelHeight { panel: PanelType::Stash, height: 0.30 },
+                        PanelHeight { panel: PanelType::Files, height: 0.20 },
+                        PanelHeight { panel: PanelType::Status, height: 0.15 },
+                        PanelHeight { panel: PanelType::Branches, height: 0.15 },
+                        PanelHeight { panel: PanelType::Stash, height: 0.10 },
+                        PanelHeight { panel: PanelType::Tags, height: 0.10 },
+                        PanelHeight { panel: PanelType::Worktrees, height: 0.10 },
+                        PanelHeight { panel: PanelType::Submodules, height: 0.10 },
+                        PanelHeight { panel: PanelType::Remotes, height: 0.10 },
                     ],
                 },
                 Column {
-                    width: 0.25,
+                    width: 0.30,
                     panels: vec![
-                        PanelHeight { panel: PanelType::Commits, height: 0.50 },
-                        PanelHeight { panel: PanelType::Tags, height: 0.25 },
-                        PanelHeight { panel: PanelType::Remotes, height: 0.25 },
+                        PanelHeight { panel: PanelType::Commits, height: 0.85 },
+                        PanelHeight { panel: PanelType::Conflicts, height: 0.15 },
                     ],
                 },
                 Column {
                     width: 0.50,
                     panels: vec![
-                        PanelHeight { panel: PanelType::Diff, height: 0.65 },
-                        PanelHeight { panel: PanelType::LogGraph, height: 0.35 },
+                        PanelHeight { panel: PanelType::Diff, height: 1.0 },
                     ],
                 },
             ],
@@ -127,7 +130,6 @@ impl LayoutConfig {
             "blame" => Some(PanelType::Blame),
             "files" => Some(PanelType::Files),
             "conflicts" => Some(PanelType::Conflicts),
-            "loggraph" | "log_graph" | "graph" => Some(PanelType::LogGraph),
             _ => None,
         }
     }

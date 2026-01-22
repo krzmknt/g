@@ -13,8 +13,11 @@ pub struct DiffView {
     pub diff: DiffInfo,
     pub current_file: usize,
     pub scroll: usize,
+    pub h_offset: usize,
     pub show_line_numbers: bool,
     pub mode: DiffMode,
+    pub max_content_width: usize,
+    pub view_width: usize,
 }
 
 impl DiffView {
@@ -23,9 +26,32 @@ impl DiffView {
             diff: DiffInfo { files: Vec::new() },
             current_file: 0,
             scroll: 0,
+            h_offset: 0,
             show_line_numbers: true,
             mode: DiffMode::Inline,
+            max_content_width: 0,
+            view_width: 0,
         }
+    }
+
+    pub fn can_scroll_left(&self) -> bool {
+        self.h_offset > 0
+    }
+
+    pub fn can_scroll_right(&self) -> bool {
+        if self.view_width == 0 {
+            return self.max_content_width > 0;
+        }
+        self.max_content_width > self.view_width &&
+            self.h_offset < self.max_content_width.saturating_sub(self.view_width)
+    }
+
+    pub fn scroll_left(&mut self) {
+        self.h_offset = self.h_offset.saturating_sub(4);
+    }
+
+    pub fn scroll_right(&mut self) {
+        self.h_offset += 4;
     }
 
     pub fn update(&mut self, diff: DiffInfo) {
@@ -50,6 +76,15 @@ impl DiffView {
 
     pub fn scroll_down(&mut self) {
         self.scroll += 1;
+    }
+
+    pub fn scroll_to_top(&mut self) {
+        self.scroll = 0;
+    }
+
+    pub fn scroll_to_bottom(&mut self) {
+        // Set to a large number, rendering will clamp it
+        self.scroll = usize::MAX / 2;
     }
 
     pub fn next_file(&mut self) {
@@ -157,6 +192,22 @@ impl DiffView {
         let line_num_width = if self.show_line_numbers { 8 } else { 0 };
         let visible_height = inner.height as usize;
         let content_area_width = inner.width.saturating_sub(1); // Leave space for scrollbar
+
+        // Calculate max content width and store view width
+        self.view_width = (content_area_width.saturating_sub(line_num_width)) as usize;
+        self.max_content_width = lines.iter().map(|(_, _, _, content)| {
+            content.trim_end_matches('\n').chars().count() + 1 // +1 for prefix
+        }).max().unwrap_or(0) + 2; // +2 for scrollbar (1) + margin (1)
+
+        // Clamp h_offset
+        if self.max_content_width <= self.view_width {
+            self.h_offset = 0;
+        } else {
+            let max_offset = self.max_content_width.saturating_sub(self.view_width);
+            if self.h_offset > max_offset {
+                self.h_offset = max_offset;
+            }
+        }
 
         for (i, (old_line, new_line, line_type, content)) in lines
             .iter()
@@ -271,6 +322,24 @@ impl DiffView {
         let total_width = inner.width.saturating_sub(1); // Leave space for scrollbar
         let half_width = total_width / 2;
         let line_num_width: u16 = 4;
+
+        // Calculate max content width for side-by-side mode
+        self.view_width = (half_width.saturating_sub(line_num_width + 1)) as usize;
+        self.max_content_width = paired_lines.iter().map(|(left, right)| {
+            let left_len = left.as_ref().map(|(_, c)| c.chars().count()).unwrap_or(0);
+            let right_len = right.as_ref().map(|(_, c)| c.chars().count()).unwrap_or(0);
+            left_len.max(right_len)
+        }).max().unwrap_or(0) + 2; // +2 for scrollbar (1) + margin (1)
+
+        // Clamp h_offset
+        if self.max_content_width <= self.view_width {
+            self.h_offset = 0;
+        } else {
+            let max_offset = self.max_content_width.saturating_sub(self.view_width);
+            if self.h_offset > max_offset {
+                self.h_offset = max_offset;
+            }
+        }
 
         // Draw separator line
         let sep_x = inner.x + half_width;

@@ -6,6 +6,7 @@ pub struct CommitInfo {
     pub author: String,
     pub email: String,
     pub time: i64,
+    pub refs: Vec<String>,  // Branch/tag names pointing to this commit
 }
 
 impl CommitInfo {
@@ -25,7 +26,13 @@ impl CommitInfo {
             author: commit.author().name().unwrap_or("").to_string(),
             email: commit.author().email().unwrap_or("").to_string(),
             time: commit.time().seconds(),
+            refs: Vec::new(),
         }
+    }
+
+    pub fn with_refs(mut self, refs: Vec<String>) -> Self {
+        self.refs = refs;
+        self
     }
 
     pub fn relative_time(&self) -> String {

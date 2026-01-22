@@ -5,9 +5,9 @@ use crate::git::Repository;
 use crate::tui::{Terminal, Buffer, Rect, Style, Color};
 use crate::input::{EventReader, Event, KeyEvent, KeyCode, Modifiers, MouseEvent, MouseEventKind, MouseButton};
 use crate::views::{
-    StatusView, BranchesView, CommitsView, DiffView, DiffMode, Section, StashView,
+    StatusView, BranchesView, CommitsView, CommitsViewMode, DiffView, DiffMode, Section, StashView,
     TagsView, RemotesView, WorktreeView, SubmodulesView, BlameView, FileTreeView,
-    ConflictView, LogGraphView, MenuView, PanelType,
+    ConflictView, MenuView, PanelType,
 };
 use crate::widgets::{Block, Borders, Widget};
 
@@ -20,6 +20,7 @@ pub enum Mode {
     Search,
     Command,
     Input(InputContext),
+    Confirm(ConfirmAction),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -35,6 +36,16 @@ pub enum InputContext {
     SearchQuery,
     TagName,
     StashMessage,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ConfirmAction {
+    BranchDelete,
+    BranchForceDelete,
+    Discard,
+    Push,
+    StashDrop,
+    CommitRevert,
 }
 
 
@@ -60,7 +71,6 @@ pub struct App {
     pub blame_view: BlameView,
     pub filetree_view: FileTreeView,
     pub conflict_view: ConflictView,
-    pub loggraph_view: LogGraphView,
     pub menu_view: MenuView,
 
     pub input_buffer: String,
@@ -71,6 +81,12 @@ pub struct App {
 
     // Border dragging state
     pub drag_state: Option<DragState>,
+
+    // Branch creation source (for "create branch from" feature)
+    pub branch_create_from: Option<String>,
+
+    // Confirmation context (stores target name for confirmation dialog)
+    pub confirm_target: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -115,13 +131,14 @@ impl App {
             blame_view: BlameView::new(),
             filetree_view: FileTreeView::new(),
             conflict_view: ConflictView::new(),
-            loggraph_view: LogGraphView::new(),
             menu_view: MenuView::new(),
             input_buffer: String::new(),
             input_cursor: 0,
             message: None,
             should_quit: false,
             drag_state: None,
+            branch_create_from: None,
+            confirm_target: None,
         })
     }
 
@@ -172,7 +189,7 @@ impl App {
         self.refresh_submodules()?;
         self.refresh_conflicts()?;
         self.refresh_filetree()?;
-        self.refresh_loggraph()?;
+        self.refresh_graph_commits()?;
         Ok(())
     }
 
@@ -213,14 +230,14 @@ impl App {
     }
 
     fn refresh_filetree(&mut self) -> Result<()> {
-        let tree = self.repo.file_tree()?;
+        let tree = self.repo.file_tree(self.filetree_view.show_ignored)?;
         self.filetree_view.update(tree);
         Ok(())
     }
 
-    fn refresh_loggraph(&mut self) -> Result<()> {
+    fn refresh_graph_commits(&mut self) -> Result<()> {
         let commits = self.repo.log_graph(self.config.max_commits)?;
-        self.loggraph_view.update(commits);
+        self.commits_view.update_graph(commits);
         Ok(())
     }
 
@@ -270,6 +287,7 @@ impl App {
         let view_mode = self.view_mode;
         let message = self.message.clone();
         let input_buffer = self.input_buffer.clone();
+        let branch_create_from = self.branch_create_from.clone();
 
         // Get repo info for header
         let repo_name = self.repo.name();
@@ -329,7 +347,6 @@ impl App {
                                 PanelType::Blame => self.blame_view.render(panel_area, buf, &theme, is_focused),
                                 PanelType::Files => self.filetree_view.render(panel_area, buf, &theme, is_focused),
                                 PanelType::Conflicts => self.conflict_view.render(panel_area, buf, &theme, is_focused),
-                                PanelType::LogGraph => self.loggraph_view.render(panel_area, buf, &theme, is_focused),
                             }
 
                             panel_y += panel_h;
@@ -353,13 +370,33 @@ impl App {
                         PanelType::Blame => self.blame_view.render(main, buf, &theme, true),
                         PanelType::Files => self.filetree_view.render(main, buf, &theme, true),
                         PanelType::Conflicts => self.conflict_view.render(main, buf, &theme, true),
-                        PanelType::LogGraph => self.loggraph_view.render(main, buf, &theme, true),
                     }
                 }
             }
 
-            // Footer
-            Self::render_footer(buf, footer, &theme, mode, view_mode, message.as_deref(), &input_buffer, focused_panel);
+            // Footer - pass scroll state for focused panel
+            let (can_scroll_left, can_scroll_right) = match focused_panel {
+                PanelType::Files => (self.filetree_view.can_scroll_left(), self.filetree_view.can_scroll_right()),
+                PanelType::Commits => (self.commits_view.can_scroll_left(), self.commits_view.can_scroll_right()),
+                PanelType::Branches => (self.branches_view.can_scroll_left(), self.branches_view.can_scroll_right()),
+                PanelType::Stash => (self.stash_view.can_scroll_left(), self.stash_view.can_scroll_right()),
+                PanelType::Tags => (self.tags_view.can_scroll_left(), self.tags_view.can_scroll_right()),
+                PanelType::Remotes => (self.remotes_view.can_scroll_left(), self.remotes_view.can_scroll_right()),
+                PanelType::Worktrees => (self.worktree_view.can_scroll_left(), self.worktree_view.can_scroll_right()),
+                PanelType::Submodules => (self.submodules_view.can_scroll_left(), self.submodules_view.can_scroll_right()),
+                PanelType::Blame => (self.blame_view.can_scroll_left(), self.blame_view.can_scroll_right()),
+                PanelType::Conflicts => (self.conflict_view.can_scroll_left(), self.conflict_view.can_scroll_right()),
+                PanelType::Status => (self.status_view.can_scroll_left(), self.status_view.can_scroll_right()),
+                PanelType::Diff => (self.diff_view.can_scroll_left(), self.diff_view.can_scroll_right()),
+            };
+            Self::render_footer(buf, footer, &theme, mode, view_mode, message.as_deref(), &input_buffer, focused_panel, branch_create_from.as_deref(), self.confirm_target.as_deref(), can_scroll_left, can_scroll_right);
+
+            // Logo at bottom right
+            let logo = "g v0.1.0";
+            let logo_x = buf.area.width.saturating_sub(logo.len() as u16 + 1);
+            let logo_y = buf.area.height.saturating_sub(1);
+            let logo_style = Style::new().fg(Color::Rgb(100, 100, 100));  // Dim gray
+            buf.set_string(logo_x, logo_y, logo, logo_style);
         })?;
 
         Ok(())
@@ -424,7 +461,7 @@ impl App {
         view.render(area, buf, theme, focused);
     }
 
-    fn render_footer(buf: &mut Buffer, area: Rect, theme: &Theme, mode: Mode, view_mode: ViewMode, message: Option<&str>, input: &str, focused_panel: Panel) {
+    fn render_footer(buf: &mut Buffer, area: Rect, theme: &Theme, mode: Mode, view_mode: ViewMode, message: Option<&str>, input: &str, focused_panel: Panel, branch_create_from: Option<&str>, confirm_target: Option<&str>, can_scroll_left: bool, can_scroll_right: bool) {
         // Message line (top of footer)
         if let Some(msg) = message {
             buf.set_string(area.x + 1, area.y, msg, Style::new().fg(theme.foreground));
@@ -441,27 +478,36 @@ impl App {
                 let help_y1 = area.y + 1;
 
                 if view_mode == ViewMode::SinglePane {
-                    // Show panel navigation guide in single-pane mode
-                    let panel_guide = format!(
-                        "← {} | {} | {} | {} | {} →",
-                        if focused_panel == PanelType::Status { "[Status]" } else { "Status" },
-                        if focused_panel == PanelType::Branches { "[Branches]" } else { "Branches" },
-                        if focused_panel == PanelType::Commits { "[Commits]" } else { "Commits" },
-                        if focused_panel == PanelType::Stash { "[Stash]" } else { "Stash" },
-                        if focused_panel == PanelType::Diff { "[Diff]" } else { "Diff" },
-                    );
-                    buf.set_string(area.x + 1, help_y1, &panel_guide, Style::new().fg(theme.foreground));
+                    // Rich tab bar for zoom mode
+                    Self::render_zoom_tab_bar(buf, area.x, help_y1, area.width, focused_panel, theme);
                 } else {
-                    let global_cmds = [
+                    // Build global commands with dynamic h/l scroll indicator
+                    let scroll_cmd: Option<(&str, &str)> = match (can_scroll_left, can_scroll_right) {
+                        (true, true) => Some(("h/l", "scroll")),
+                        (true, false) => Some(("h", "scroll")),
+                        (false, true) => Some(("l", "scroll")),
+                        (false, false) => None,
+                    };
+
+                    let mut global_cmds_vec: Vec<(&str, &str)> = vec![
                         ("q", "quit"),
-                        ("Tab/←→", "panel"),
+                        ("arrows", "focus"),
+                        ("H/J/K/L", "resize"),
                         ("j/k", "move"),
+                    ];
+
+                    if let Some(scroll) = scroll_cmd {
+                        global_cmds_vec.push(scroll);
+                    }
+
+                    global_cmds_vec.extend_from_slice(&[
                         ("Enter", "select"),
                         ("/", "search"),
                         ("r", "refresh"),
                         ("z", "zoom"),
-                    ];
-                    Self::render_command_line(buf, area.x + 1, help_y1, &global_cmds, key_style, desc_style, sep_style, area.width.saturating_sub(2));
+                    ]);
+
+                    Self::render_command_line(buf, area.x + 1, help_y1, &global_cmds_vec, key_style, desc_style, sep_style, area.width.saturating_sub(2));
                 }
 
                 // Line 2: Panel-specific commands
@@ -473,78 +519,69 @@ impl App {
                         ("d", "discard"),
                         ("s", "stash"),
                         ("P", "push"),
-                        ("z", "zoom"),
                     ],
                     PanelType::Branches => &[
-                        ("n", "new branch"),
-                        ("t", "toggle local/remote"),
+                        ("c", "create from"),
+                        ("v", "view local/remote"),
                         ("d", "delete (merged)"),
                         ("D", "force delete"),
-                        ("z", "zoom"),
                     ],
                     PanelType::Commits => &[
                         ("Enter", "view diff"),
                         ("c", "checkout"),
                         ("R", "revert"),
-                        ("z", "zoom"),
+                        ("v", "view mode"),
                     ],
                     PanelType::Stash => &[
                         ("Enter", "pop"),
                         ("a", "apply"),
                         ("d", "drop"),
-                        ("z", "zoom"),
                     ],
                     PanelType::Diff => &[
                         ("j/k", "scroll"),
                         ("v", "toggle inline/split"),
-                        ("z", "zoom"),
                     ],
                     PanelType::Tags => &[
                         ("n", "new tag"),
                         ("d", "delete"),
-                        ("z", "zoom"),
                     ],
                     PanelType::Remotes => &[
                         ("f", "fetch"),
-                        ("z", "zoom"),
                     ],
                     PanelType::Worktrees => &[
-                        ("z", "zoom"),
                     ],
                     PanelType::Submodules => &[
                         ("u", "update"),
-                        ("z", "zoom"),
                     ],
                     PanelType::Blame => &[
                         ("j/k", "scroll"),
-                        ("z", "zoom"),
                     ],
                     PanelType::Files => &[
-                        ("Enter", "expand/collapse"),
+                        ("Space/Enter", "open"),
+                        ("v", "show ignored"),
                         ("b", "blame"),
-                        ("z", "zoom"),
                     ],
                     PanelType::Conflicts => &[
                         ("o", "use ours"),
                         ("t", "use theirs"),
-                        ("z", "zoom"),
-                    ],
-                    PanelType::LogGraph => &[
-                        ("j/k", "scroll"),
-                        ("z", "zoom"),
                     ],
                 };
                 Self::render_command_line(buf, area.x + 1, help_y2, panel_cmds, key_style, desc_style, sep_style, area.width.saturating_sub(2));
             }
             Mode::Search | Mode::Input(_) => {
-                let prompt = match mode {
-                    Mode::Search => "/",
-                    Mode::Input(InputContext::CommitMessage) => "Commit: ",
-                    Mode::Input(InputContext::BranchName) => "Branch: ",
-                    Mode::Input(InputContext::SearchQuery) => "Search: ",
-                    Mode::Input(InputContext::TagName) => "Tag: ",
-                    Mode::Input(InputContext::StashMessage) => "Stash: ",
-                    _ => "> ",
+                let prompt: String = match mode {
+                    Mode::Search => "/".to_string(),
+                    Mode::Input(InputContext::CommitMessage) => "Commit: ".to_string(),
+                    Mode::Input(InputContext::BranchName) => {
+                        match branch_create_from {
+                            Some(from) => format!("New branch from '{}': ", from),
+                            None => "Branch: ".to_string(),
+                        }
+                    },
+                    Mode::Input(InputContext::SearchQuery) => "Search: ".to_string(),
+                    Mode::Input(InputContext::TagName) => "Tag: ".to_string(),
+                    Mode::Input(InputContext::StashMessage) => "Stash: ".to_string(),
+                    _ => "> ".to_string(),
                 };
                 let line = format!("{}{}", prompt, input);
                 buf.set_string(area.x + 1, area.y + 1, &line, Style::new().fg(theme.foreground));
@@ -556,6 +593,21 @@ impl App {
             Mode::Command => {
                 let line = format!(":{}", input);
                 buf.set_string(area.x + 1, area.y + 1, &line, Style::new().fg(theme.foreground));
+            }
+            Mode::Confirm(action) => {
+                let action_desc = match action {
+                    ConfirmAction::BranchDelete => format!("Delete branch '{}'?", confirm_target.as_deref().unwrap_or("?")),
+                    ConfirmAction::BranchForceDelete => format!("Force delete branch '{}'?", confirm_target.as_deref().unwrap_or("?")),
+                    ConfirmAction::Discard => format!("Discard changes in '{}'?", confirm_target.as_deref().unwrap_or("?")),
+                    ConfirmAction::Push => "Push to remote?".to_string(),
+                    ConfirmAction::StashDrop => format!("Drop stash@{{{}}}?", confirm_target.as_deref().unwrap_or("?")),
+                    ConfirmAction::CommitRevert => format!("Revert commit {}?", confirm_target.as_deref().map(|s| &s[..7.min(s.len())]).unwrap_or("?")),
+                };
+                let warn_style = Style::new().fg(theme.diff_remove).bold();
+                buf.set_string(area.x + 1, area.y + 1, &action_desc, warn_style);
+
+                let confirm_help = [("y", "yes"), ("n/Esc", "cancel")];
+                Self::render_command_line(buf, area.x + 1, area.y + 2, &confirm_help, key_style, desc_style, sep_style, area.width.saturating_sub(2));
             }
         }
     }
@@ -573,18 +625,69 @@ impl App {
                 current_x += 3;
             }
 
-            // Key
+            // Key (use char count for proper width calculation)
             buf.set_string(current_x, y, key, key_style);
-            current_x += key.len() as u16;
+            current_x += key.chars().count() as u16;
 
-            // Space
+            // Colon (no space)
             buf.set_string(current_x, y, ":", sep_style);
             current_x += 1;
 
             // Description
             buf.set_string(current_x, y, desc, desc_style);
-            current_x += desc.len() as u16;
+            current_x += desc.chars().count() as u16;
         }
+    }
+
+    fn render_zoom_tab_bar(buf: &mut Buffer, x: u16, y: u16, width: u16, focused: PanelType, theme: &Theme) {
+        // Simple tab bar with fixed-width tabs and blue highlight
+        use crate::tui::Color;
+
+        let panels: &[(PanelType, &str)] = &[
+            (PanelType::Status, "Status"),
+            (PanelType::Branches, "Branch"),
+            (PanelType::Commits, "Commit"),
+            (PanelType::Stash, "Stash"),
+            (PanelType::Diff, "Diff"),
+            (PanelType::Tags, "Tags"),
+            (PanelType::Remotes, "Remote"),
+            (PanelType::Worktrees, "Wktree"),
+            (PanelType::Submodules, "Submod"),
+            (PanelType::Blame, "Blame"),
+            (PanelType::Files, "Files"),
+            (PanelType::Conflicts, "Conflct"),
+        ];
+
+        // Fixed tab width (including padding)
+        let tab_width: u16 = 8;
+        let mut current_x = x + 1;
+
+        // Blue background color for active tab
+        let active_bg = Color::Rgb(30, 80, 140);
+        let active_style = Style::new().fg(Color::White).bg(active_bg);
+        let inactive_style = Style::new().fg(theme.untracked);
+
+        for (panel_type, name) in panels.iter() {
+            if current_x + tab_width > x + width - 10 {
+                break;
+            }
+
+            // Pad name to fixed width
+            let padded = format!("{:^width$}", name, width = tab_width as usize);
+
+            if *panel_type == focused {
+                buf.set_string(current_x, y, &padded, active_style);
+            } else {
+                buf.set_string(current_x, y, &padded, inactive_style);
+            }
+
+            current_x += tab_width;
+        }
+
+        // z:exit at the end
+        let exit_str = " z:exit";
+        let exit_x = x + width - exit_str.len() as u16 - 1;
+        buf.set_string(exit_x, y, exit_str, Style::new().fg(theme.branch_local));
     }
 
     fn handle_key(&mut self, key: KeyEvent) -> Result<()> {
@@ -593,7 +696,104 @@ impl App {
             Mode::Search => self.handle_search_key(key),
             Mode::Command => self.handle_command_key(key),
             Mode::Input(ctx) => self.handle_input_key(key, ctx),
+            Mode::Confirm(action) => self.handle_confirm_key(key, action),
         }
+    }
+
+    fn handle_confirm_key(&mut self, key: KeyEvent, action: ConfirmAction) -> Result<()> {
+        match key.code {
+            KeyCode::Char('y') | KeyCode::Char('Y') => {
+                // Execute the confirmed action
+                self.execute_confirmed_action(action)?;
+                self.mode = Mode::Normal;
+                self.confirm_target = None;
+            }
+            KeyCode::Char('n') | KeyCode::Char('N') | KeyCode::Escape => {
+                self.message = Some("Cancelled".to_string());
+                self.mode = Mode::Normal;
+                self.confirm_target = None;
+            }
+            _ => {}
+        }
+        Ok(())
+    }
+
+    fn execute_confirmed_action(&mut self, action: ConfirmAction) -> Result<()> {
+        match action {
+            ConfirmAction::BranchDelete => {
+                if let Some(ref name) = self.confirm_target {
+                    match self.repo.delete_branch(name, false) {
+                        Ok(()) => {
+                            self.message = Some(format!("Deleted branch '{}'", name));
+                            self.refresh_branches()?;
+                        }
+                        Err(e) => {
+                            self.message = Some(format!("Delete failed: {}", e));
+                        }
+                    }
+                }
+            }
+            ConfirmAction::BranchForceDelete => {
+                if let Some(ref name) = self.confirm_target {
+                    match self.repo.delete_branch(name, true) {
+                        Ok(()) => {
+                            self.message = Some(format!("Force deleted branch '{}'", name));
+                            self.refresh_branches()?;
+                        }
+                        Err(e) => {
+                            self.message = Some(format!("Force delete failed: {}", e));
+                        }
+                    }
+                }
+            }
+            ConfirmAction::Discard => {
+                if let Some(ref path) = self.confirm_target {
+                    match self.repo.discard_file(path) {
+                        Ok(()) => {
+                            self.message = Some(format!("Discarded changes in '{}'", path));
+                            self.refresh_status()?;
+                            self.refresh_diff()?;
+                        }
+                        Err(e) => {
+                            self.message = Some(format!("Discard failed: {}", e));
+                        }
+                    }
+                }
+            }
+            ConfirmAction::Push => {
+                // Push is not yet implemented
+                self.message = Some("Push not implemented yet".to_string());
+            }
+            ConfirmAction::StashDrop => {
+                if let Some(ref index_str) = self.confirm_target {
+                    if let Ok(index) = index_str.parse::<usize>() {
+                        match self.repo.stash_drop(index) {
+                            Ok(()) => {
+                                self.message = Some(format!("Dropped stash@{{{}}}", index));
+                                self.refresh_stash()?;
+                            }
+                            Err(e) => {
+                                self.message = Some(format!("Stash drop failed: {}", e));
+                            }
+                        }
+                    }
+                }
+            }
+            ConfirmAction::CommitRevert => {
+                if let Some(ref commit_id) = self.confirm_target {
+                    match self.repo.revert_commit(commit_id) {
+                        Ok(()) => {
+                            self.message = Some("Reverted commit".to_string());
+                            self.refresh_all()?;
+                        }
+                        Err(e) => {
+                            self.message = Some(format!("Revert failed: {}", e));
+                        }
+                    }
+                }
+            }
+        }
+        Ok(())
     }
 
     fn handle_mouse(&mut self, mouse: MouseEvent) -> Result<()> {
@@ -966,17 +1166,40 @@ impl App {
     }
 
     fn next_panel(&self) -> PanelType {
-        let all_panels = self.config.layout.all_panels();
+        let all_panels = self.available_panels();
         let current_idx = all_panels.iter().position(|p| *p == self.focused_panel).unwrap_or(0);
         let next_idx = (current_idx + 1) % all_panels.len();
         all_panels[next_idx]
     }
 
     fn prev_panel(&self) -> PanelType {
-        let all_panels = self.config.layout.all_panels();
+        let all_panels = self.available_panels();
         let current_idx = all_panels.iter().position(|p| *p == self.focused_panel).unwrap_or(0);
         let prev_idx = if current_idx == 0 { all_panels.len() - 1 } else { current_idx - 1 };
         all_panels[prev_idx]
+    }
+
+    fn available_panels(&self) -> Vec<PanelType> {
+        match self.view_mode {
+            ViewMode::SinglePane => {
+                // All panels available in zoom mode
+                vec![
+                    PanelType::Status,
+                    PanelType::Branches,
+                    PanelType::Commits,
+                    PanelType::Stash,
+                    PanelType::Diff,
+                    PanelType::Tags,
+                    PanelType::Remotes,
+                    PanelType::Worktrees,
+                    PanelType::Submodules,
+                    PanelType::Blame,
+                    PanelType::Files,
+                    PanelType::Conflicts,
+                ]
+            }
+            ViewMode::MultiPane => self.config.layout.all_panels(),
+        }
     }
 
     fn panel_at_position(&self, x: u16, y: u16, width: u16, main_top: u16, main_height: u16) -> Option<PanelType> {
@@ -1029,7 +1252,6 @@ impl App {
             PanelType::Blame => self.blame_view.move_up(),
             PanelType::Files => self.filetree_view.move_up(),
             PanelType::Conflicts => self.conflict_view.move_up(),
-            PanelType::LogGraph => self.loggraph_view.move_up(),
         }
         Ok(())
     }
@@ -1051,7 +1273,6 @@ impl App {
             PanelType::Blame => self.blame_view.move_down(),
             PanelType::Files => self.filetree_view.move_down(),
             PanelType::Conflicts => self.conflict_view.move_down(),
-            PanelType::LogGraph => self.loggraph_view.move_down(),
         }
         Ok(())
     }
@@ -1078,9 +1299,21 @@ impl App {
                 self.menu_view.toggle();
             }
 
-            // Vim navigation (j/k for item movement within panel)
+            // Vim navigation (j/k for item movement within panel, g/G for top/bottom)
             KeyCode::Char('j') => self.item_down()?,
             KeyCode::Char('k') => self.item_up()?,
+            KeyCode::Char('g') => self.item_top(),
+            KeyCode::Char('G') => self.item_bottom(),
+
+            // h/l for horizontal scrolling
+            KeyCode::Char('h') => self.scroll_left(),
+            KeyCode::Char('l') => self.scroll_right(),
+
+            // Shift+hjkl for resizing panes/columns
+            KeyCode::Char('K') => self.resize_focused_panel_height(-0.01),
+            KeyCode::Char('J') => self.resize_focused_panel_height(0.01),
+            KeyCode::Char('H') => self.resize_focused_column_width(-0.01),
+            KeyCode::Char('L') => self.resize_focused_column_width(0.01),
 
             // Arrow keys for pane navigation (move to adjacent pane)
             KeyCode::Up => self.focus_pane_up(),
@@ -1150,13 +1383,30 @@ impl App {
                 }
             }
 
-            KeyCode::Char('n') if self.focused_panel == PanelType::Branches => {
-                self.mode = Mode::Input(InputContext::BranchName);
-                self.input_buffer.clear();
-                self.input_cursor = 0;
+            // Discard changes (Status panel)
+            KeyCode::Char('d') if self.focused_panel == PanelType::Status => {
+                if let Some(entry) = self.status_view.selected_entry() {
+                    self.confirm_target = Some(entry.path.clone());
+                    self.mode = Mode::Confirm(ConfirmAction::Discard);
+                }
             }
 
-            KeyCode::Char('t') if self.focused_panel == PanelType::Branches => {
+            // Push to remote (Status panel)
+            KeyCode::Char('P') if self.focused_panel == PanelType::Status => {
+                self.confirm_target = None;
+                self.mode = Mode::Confirm(ConfirmAction::Push);
+            }
+
+            KeyCode::Char('c') if self.focused_panel == PanelType::Branches => {
+                if let Some(branch) = self.branches_view.selected_branch() {
+                    self.branch_create_from = Some(branch.name.clone());
+                    self.mode = Mode::Input(InputContext::BranchName);
+                    self.input_buffer.clear();
+                    self.input_cursor = 0;
+                }
+            }
+
+            KeyCode::Char('v') if self.focused_panel == PanelType::Branches => {
                 self.branches_view.toggle_remote();
                 self.refresh_branches()?;
             }
@@ -1167,16 +1417,8 @@ impl App {
                     if branch.is_head {
                         self.message = Some("Cannot delete current branch".to_string());
                     } else {
-                        let name = branch.name.clone();
-                        match self.repo.delete_branch(&name, false) {
-                            Ok(()) => {
-                                self.message = Some(format!("Deleted branch: {}", name));
-                                self.refresh_branches()?;
-                            }
-                            Err(e) => {
-                                self.message = Some(format!("{}", e));
-                            }
-                        }
+                        self.confirm_target = Some(branch.name.clone());
+                        self.mode = Mode::Confirm(ConfirmAction::BranchDelete);
                     }
                 }
             }
@@ -1187,16 +1429,8 @@ impl App {
                     if branch.is_head {
                         self.message = Some("Cannot delete current branch".to_string());
                     } else {
-                        let name = branch.name.clone();
-                        match self.repo.delete_branch(&name, true) {
-                            Ok(()) => {
-                                self.message = Some(format!("Force deleted branch: {}", name));
-                                self.refresh_branches()?;
-                            }
-                            Err(e) => {
-                                self.message = Some(format!("Failed to delete: {}", e));
-                            }
-                        }
+                        self.confirm_target = Some(branch.name.clone());
+                        self.mode = Mode::Confirm(ConfirmAction::BranchForceDelete);
                     }
                 }
             }
@@ -1221,17 +1455,34 @@ impl App {
             KeyCode::Char('R') if self.focused_panel == PanelType::Commits => {
                 // Revert commit
                 if let Some(commit) = self.commits_view.selected_commit() {
-                    let short_id = commit.short_id.clone();
-                    match self.repo.revert_commit(&commit.id) {
-                        Ok(()) => {
-                            self.message = Some(format!("Reverted: {}", short_id));
-                            self.refresh_all()?;
-                        }
-                        Err(e) => {
-                            self.message = Some(format!("Revert failed: {}", e));
-                        }
-                    }
+                    self.confirm_target = Some(commit.id.clone());
+                    self.mode = Mode::Confirm(ConfirmAction::CommitRevert);
                 }
+            }
+
+            KeyCode::Char('v') if self.focused_panel == PanelType::Commits => {
+                self.commits_view.toggle_view_mode();
+                // Load graph commits if switching to graph mode
+                if self.commits_view.view_mode == CommitsViewMode::Graph {
+                    self.refresh_graph_commits()?;
+                }
+                let mode_name = match self.commits_view.view_mode {
+                    CommitsViewMode::Compact => "compact",
+                    CommitsViewMode::Detailed => "detailed",
+                    CommitsViewMode::Graph => "graph",
+                };
+                self.message = Some(format!("Commits view: {}", mode_name));
+            }
+
+            KeyCode::Char('v') if self.focused_panel == PanelType::Files => {
+                self.filetree_view.toggle_show_ignored();
+                self.refresh_filetree()?;
+                let mode_name = if self.filetree_view.show_ignored {
+                    "showing ignored files"
+                } else {
+                    "hiding ignored files"
+                };
+                self.message = Some(format!("Files view: {}", mode_name));
             }
 
             // Stash panel actions
@@ -1252,16 +1503,8 @@ impl App {
 
             KeyCode::Char('d') if self.focused_panel == PanelType::Stash => {
                 if let Some(stash) = self.stash_view.selected_stash() {
-                    let index = stash.index;
-                    match self.repo.stash_drop(index) {
-                        Ok(()) => {
-                            self.message = Some(format!("Dropped stash@{{{}}}", index));
-                            self.refresh_stash()?;
-                        }
-                        Err(e) => {
-                            self.message = Some(format!("Stash drop failed: {}", e));
-                        }
-                    }
+                    self.confirm_target = Some(stash.index.to_string());
+                    self.mode = Mode::Confirm(ConfirmAction::StashDrop);
                 }
             }
 
@@ -1378,7 +1621,6 @@ impl App {
             PanelType::Blame => self.blame_view.move_up(),
             PanelType::Files => self.filetree_view.move_up(),
             PanelType::Conflicts => self.conflict_view.move_up(),
-            PanelType::LogGraph => self.loggraph_view.move_up(),
         }
         Ok(())
     }
@@ -1400,35 +1642,203 @@ impl App {
             PanelType::Blame => self.blame_view.move_down(),
             PanelType::Files => self.filetree_view.move_down(),
             PanelType::Conflicts => self.conflict_view.move_down(),
-            PanelType::LogGraph => self.loggraph_view.move_down(),
         }
         Ok(())
     }
 
+    fn item_top(&mut self) {
+        match self.focused_panel {
+            PanelType::Status => self.status_view.move_to_top(),
+            PanelType::Branches => self.branches_view.move_to_top(),
+            PanelType::Commits => self.commits_view.move_to_top(),
+            PanelType::Stash => self.stash_view.move_to_top(),
+            PanelType::Diff => self.diff_view.scroll_to_top(),
+            PanelType::Tags => self.tags_view.move_to_top(),
+            PanelType::Remotes => self.remotes_view.move_to_top(),
+            PanelType::Worktrees => self.worktree_view.move_to_top(),
+            PanelType::Submodules => self.submodules_view.move_to_top(),
+            PanelType::Blame => self.blame_view.move_to_top(),
+            PanelType::Files => self.filetree_view.move_to_top(),
+            PanelType::Conflicts => self.conflict_view.move_to_top(),
+        }
+    }
+
+    fn item_bottom(&mut self) {
+        match self.focused_panel {
+            PanelType::Status => self.status_view.move_to_bottom(),
+            PanelType::Branches => self.branches_view.move_to_bottom(),
+            PanelType::Commits => self.commits_view.move_to_bottom(),
+            PanelType::Stash => self.stash_view.move_to_bottom(),
+            PanelType::Diff => self.diff_view.scroll_to_bottom(),
+            PanelType::Tags => self.tags_view.move_to_bottom(),
+            PanelType::Remotes => self.remotes_view.move_to_bottom(),
+            PanelType::Worktrees => self.worktree_view.move_to_bottom(),
+            PanelType::Submodules => self.submodules_view.move_to_bottom(),
+            PanelType::Blame => self.blame_view.move_to_bottom(),
+            PanelType::Files => self.filetree_view.move_to_bottom(),
+            PanelType::Conflicts => self.conflict_view.move_to_bottom(),
+        }
+    }
+
+    fn scroll_left(&mut self) {
+        match self.focused_panel {
+            PanelType::Status => self.status_view.scroll_left(),
+            PanelType::Branches => self.branches_view.scroll_left(),
+            PanelType::Commits => self.commits_view.scroll_left(),
+            PanelType::Stash => self.stash_view.scroll_left(),
+            PanelType::Diff => self.diff_view.scroll_left(),
+            PanelType::Tags => self.tags_view.scroll_left(),
+            PanelType::Remotes => self.remotes_view.scroll_left(),
+            PanelType::Worktrees => self.worktree_view.scroll_left(),
+            PanelType::Submodules => self.submodules_view.scroll_left(),
+            PanelType::Blame => self.blame_view.scroll_left(),
+            PanelType::Files => self.filetree_view.scroll_left(),
+            PanelType::Conflicts => self.conflict_view.scroll_left(),
+        }
+    }
+
+    fn scroll_right(&mut self) {
+        match self.focused_panel {
+            PanelType::Status => self.status_view.scroll_right(),
+            PanelType::Branches => self.branches_view.scroll_right(),
+            PanelType::Commits => self.commits_view.scroll_right(),
+            PanelType::Stash => self.stash_view.scroll_right(),
+            PanelType::Diff => self.diff_view.scroll_right(),
+            PanelType::Tags => self.tags_view.scroll_right(),
+            PanelType::Remotes => self.remotes_view.scroll_right(),
+            PanelType::Worktrees => self.worktree_view.scroll_right(),
+            PanelType::Submodules => self.submodules_view.scroll_right(),
+            PanelType::Blame => self.blame_view.scroll_right(),
+            PanelType::Files => self.filetree_view.scroll_right(),
+            PanelType::Conflicts => self.conflict_view.scroll_right(),
+        }
+    }
+
     fn focus_pane_up(&mut self) {
-        if let Some(panel) = self.config.layout.panel_above(self.focused_panel) {
-            self.focused_panel = panel;
-            self.terminal.force_full_redraw();
+        match self.view_mode {
+            ViewMode::SinglePane => {
+                // In zoom mode, up/down also cycles panels
+                self.focused_panel = self.prev_panel();
+                self.terminal.force_full_redraw();
+            }
+            ViewMode::MultiPane => {
+                if let Some(panel) = self.config.layout.panel_above(self.focused_panel) {
+                    self.focused_panel = panel;
+                    self.terminal.force_full_redraw();
+                }
+            }
         }
     }
 
     fn focus_pane_down(&mut self) {
-        if let Some(panel) = self.config.layout.panel_below(self.focused_panel) {
-            self.focused_panel = panel;
-            self.terminal.force_full_redraw();
+        match self.view_mode {
+            ViewMode::SinglePane => {
+                // In zoom mode, up/down also cycles panels
+                self.focused_panel = self.next_panel();
+                self.terminal.force_full_redraw();
+            }
+            ViewMode::MultiPane => {
+                if let Some(panel) = self.config.layout.panel_below(self.focused_panel) {
+                    self.focused_panel = panel;
+                    self.terminal.force_full_redraw();
+                }
+            }
         }
     }
 
     fn focus_pane_left(&mut self) {
-        if let Some(panel) = self.config.layout.panel_left(self.focused_panel) {
-            self.focused_panel = panel;
-            self.terminal.force_full_redraw();
+        match self.view_mode {
+            ViewMode::SinglePane => {
+                self.focused_panel = self.prev_panel();
+                self.terminal.force_full_redraw();
+            }
+            ViewMode::MultiPane => {
+                if let Some(panel) = self.config.layout.panel_left(self.focused_panel) {
+                    self.focused_panel = panel;
+                    self.terminal.force_full_redraw();
+                }
+            }
         }
     }
 
     fn focus_pane_right(&mut self) {
-        if let Some(panel) = self.config.layout.panel_right(self.focused_panel) {
-            self.focused_panel = panel;
+        match self.view_mode {
+            ViewMode::SinglePane => {
+                self.focused_panel = self.next_panel();
+                self.terminal.force_full_redraw();
+            }
+            ViewMode::MultiPane => {
+                if let Some(panel) = self.config.layout.panel_right(self.focused_panel) {
+                    self.focused_panel = panel;
+                    self.terminal.force_full_redraw();
+                }
+            }
+        }
+    }
+
+    /// Resize the height of the focused panel (delta is percentage change)
+    fn resize_focused_panel_height(&mut self, delta: f32) {
+        if let Some((col_idx, panel_idx)) = self.config.layout.find_panel(self.focused_panel) {
+            let column = &mut self.config.layout.columns[col_idx];
+
+            // Need at least 2 panels in the column to resize
+            if column.panels.len() < 2 {
+                return;
+            }
+
+            // Determine which panels to adjust
+            // If not the last panel, adjust current and next
+            // If last panel, adjust previous and current
+            let (idx1, idx2) = if panel_idx < column.panels.len() - 1 {
+                (panel_idx, panel_idx + 1)
+            } else {
+                (panel_idx - 1, panel_idx)
+            };
+
+            let combined = column.panels[idx1].height + column.panels[idx2].height;
+
+            // Apply delta to first panel (with clamping)
+            let new_height1 = (column.panels[idx1].height + delta).clamp(0.1, combined - 0.1);
+            let new_height2 = combined - new_height1;
+
+            column.panels[idx1].height = new_height1;
+            column.panels[idx2].height = new_height2;
+
+            self.save_layout_config();
+            self.terminal.force_full_redraw();
+        }
+    }
+
+    /// Resize the width of the column containing the focused panel (delta is percentage change)
+    fn resize_focused_column_width(&mut self, delta: f32) {
+        if let Some((col_idx, _)) = self.config.layout.find_panel(self.focused_panel) {
+            let num_columns = self.config.layout.columns.len();
+
+            // Need at least 2 columns to resize
+            if num_columns < 2 {
+                return;
+            }
+
+            // Determine which columns to adjust
+            // If not the last column, adjust current and next
+            // If last column, adjust previous and current
+            let (idx1, idx2) = if col_idx < num_columns - 1 {
+                (col_idx, col_idx + 1)
+            } else {
+                (col_idx - 1, col_idx)
+            };
+
+            let combined = self.config.layout.columns[idx1].width
+                + self.config.layout.columns[idx2].width;
+
+            // Apply delta to first column (with clamping)
+            let new_width1 = (self.config.layout.columns[idx1].width + delta).clamp(0.1, combined - 0.1);
+            let new_width2 = combined - new_width1;
+
+            self.config.layout.columns[idx1].width = new_width1;
+            self.config.layout.columns[idx2].width = new_width2;
+
+            self.save_layout_config();
             self.terminal.force_full_redraw();
         }
     }
@@ -1514,7 +1924,12 @@ impl App {
                 // Expand/collapse or stage file
                 if let Some(entry) = self.filetree_view.selected_entry() {
                     if entry.is_dir {
-                        self.filetree_view.toggle_expand();
+                        let path = entry.path.clone();
+                        if let Some(load_path) = self.filetree_view.toggle_expand() {
+                            // Lazy load children for this directory
+                            let children = self.repo.file_tree_dir(&load_path, self.filetree_view.show_ignored)?;
+                            self.filetree_view.load_children(&path, children);
+                        }
                     } else {
                         // Stage or unstage file based on status
                         let path = entry.path.clone();
@@ -1527,10 +1942,6 @@ impl App {
             }
             PanelType::Conflicts => {
                 // Open conflict resolution (show in diff)
-                self.focused_panel = PanelType::Diff;
-            }
-            PanelType::LogGraph => {
-                // Show commit in diff view
                 self.focused_panel = PanelType::Diff;
             }
         }
@@ -1606,9 +2017,13 @@ impl App {
             }
             InputContext::BranchName => {
                 if !self.input_buffer.is_empty() {
-                    self.repo.create_branch(&self.input_buffer, None)?;
+                    let from = self.branch_create_from.take();
+                    self.repo.create_branch(&self.input_buffer, from.as_deref())?;
                     self.refresh_branches()?;
-                    self.message = Some(format!("Created branch: {}", self.input_buffer));
+                    match from {
+                        Some(ref f) => self.message = Some(format!("Created branch '{}' from '{}'", self.input_buffer, f)),
+                        None => self.message = Some(format!("Created branch: {}", self.input_buffer)),
+                    }
                 }
             }
             InputContext::SearchQuery => {
@@ -1649,6 +2064,5 @@ fn panel_type_to_string(panel: PanelType) -> &'static str {
         PanelType::Blame => "blame",
         PanelType::Files => "files",
         PanelType::Conflicts => "conflicts",
-        PanelType::LogGraph => "loggraph",
     }
 }

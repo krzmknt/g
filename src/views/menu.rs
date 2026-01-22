@@ -16,7 +16,6 @@ pub enum PanelType {
     Blame,
     Files,
     Conflicts,
-    LogGraph,
 }
 
 impl PanelType {
@@ -34,7 +33,6 @@ impl PanelType {
             PanelType::Blame,
             PanelType::Files,
             PanelType::Conflicts,
-            PanelType::LogGraph,
         ]
     }
 
@@ -52,7 +50,6 @@ impl PanelType {
             PanelType::Blame => "Blame",
             PanelType::Files => "Files",
             PanelType::Conflicts => "Conflicts",
-            PanelType::LogGraph => "Log Graph",
         }
     }
 
@@ -70,7 +67,6 @@ impl PanelType {
             PanelType::Blame => "b",
             PanelType::Files => "f",
             PanelType::Conflicts => "x",
-            PanelType::LogGraph => "g",
         }
     }
 }

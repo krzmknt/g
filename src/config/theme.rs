@@ -26,8 +26,8 @@ impl Theme {
             border: Color::Rgb(108, 112, 134),        // #6c7086
             border_focused: Color::Rgb(137, 180, 250), // #89b4fa
             border_unfocused: Color::Rgb(69, 71, 90), // #45475a (dimmer)
-            selection: Color::Rgb(49, 50, 68),        // #313244
-            selection_text: Color::Rgb(205, 214, 244), // #cdd6f4
+            selection: Color::Rgb(255, 140, 0),        // Orange background
+            selection_text: Color::Rgb(0, 0, 0),       // Black text for contrast
             diff_add: Color::Rgb(166, 227, 161),      // #a6e3a1
             diff_remove: Color::Rgb(243, 139, 168),   // #f38ba8
             diff_hunk: Color::Rgb(137, 220, 235),     // #89dceb

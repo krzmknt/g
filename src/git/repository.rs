@@ -136,7 +136,11 @@ impl Repository {
                 let (branch, _) = branch_result?;
                 let name = branch.name()?.unwrap_or("").to_string();
 
-                let commit = branch.get().peel_to_commit()?;
+                // Skip symbolic refs like origin/HEAD that may not resolve
+                let commit = match branch.get().peel_to_commit() {
+                    Ok(c) => c,
+                    Err(_) => continue,
+                };
                 let last_commit = CommitInfo::from_commit(&commit);
 
                 branches.push(BranchInfo {
@@ -231,6 +235,38 @@ impl Repository {
 
     // Commit operations
     pub fn commits(&self, max_count: usize) -> Result<Vec<CommitInfo>> {
+        // Build a map of commit ID -> refs (branches/tags)
+        let mut ref_map: std::collections::HashMap<String, Vec<String>> = std::collections::HashMap::new();
+
+        // Collect branch refs
+        if let Ok(branches) = self.repo.branches(None) {
+            for branch_result in branches {
+                if let Ok((branch, _)) = branch_result {
+                    if let Ok(commit) = branch.get().peel_to_commit() {
+                        let name = branch.name().ok().flatten().unwrap_or("").to_string();
+                        if !name.is_empty() {
+                            ref_map.entry(commit.id().to_string())
+                                .or_default()
+                                .push(name);
+                        }
+                    }
+                }
+            }
+        }
+
+        // Collect tag refs
+        if let Ok(tags) = self.repo.tag_names(None) {
+            for tag_name in tags.iter().flatten() {
+                if let Ok(reference) = self.repo.find_reference(&format!("refs/tags/{}", tag_name)) {
+                    if let Ok(commit) = reference.peel_to_commit() {
+                        ref_map.entry(commit.id().to_string())
+                            .or_default()
+                            .push(format!("tag:{}", tag_name));
+                    }
+                }
+            }
+        }
+
         let mut revwalk = self.repo.revwalk()?;
         revwalk.push_head()?;
         revwalk.set_sorting(git2::Sort::TIME)?;
@@ -244,7 +280,8 @@ impl Repository {
 
             let oid = oid?;
             let commit = self.repo.find_commit(oid)?;
-            commits.push(CommitInfo::from_commit(&commit));
+            let refs = ref_map.get(&oid.to_string()).cloned().unwrap_or_default();
+            commits.push(CommitInfo::from_commit(&commit).with_refs(refs));
         }
 
         Ok(commits)
@@ -722,8 +759,13 @@ impl Repository {
         })
     }
 
-    // File tree operations
-    pub fn file_tree(&self) -> Result<Vec<FileTreeEntry>> {
+    // File tree operations - lazy loading (one level at a time)
+    pub fn file_tree(&self, show_ignored: bool) -> Result<Vec<FileTreeEntry>> {
+        self.file_tree_dir("", show_ignored)
+    }
+
+    // Load a single directory level (for lazy loading)
+    pub fn file_tree_dir(&self, relative_path: &str, show_ignored: bool) -> Result<Vec<FileTreeEntry>> {
         let statuses = self.status()?;
         let status_map: std::collections::HashMap<String, FileTreeStatus> = statuses
             .iter()
@@ -743,28 +785,19 @@ impl Repository {
             })
             .collect();
 
-        self.build_file_tree(&self.path, "", &status_map)
-    }
-
-    fn build_file_tree(
-        &self,
-        base_path: &Path,
-        relative_path: &str,
-        status_map: &std::collections::HashMap<String, FileTreeStatus>,
-    ) -> Result<Vec<FileTreeEntry>> {
         let mut entries = Vec::new();
         let full_path = if relative_path.is_empty() {
-            base_path.to_path_buf()
+            self.path.clone()
         } else {
-            base_path.join(relative_path)
+            self.path.join(relative_path)
         };
 
         if let Ok(read_dir) = std::fs::read_dir(&full_path) {
             for entry in read_dir.flatten() {
                 let name = entry.file_name().to_string_lossy().to_string();
 
-                // Skip hidden files and .git
-                if name.starts_with('.') {
+                // Always skip .git directory
+                if name == ".git" {
                     continue;
                 }
 
@@ -774,13 +807,43 @@ impl Repository {
                     format!("{}/{}", relative_path, name)
                 };
 
+                // Check if the file/directory is ignored by git
+                let is_ignored = self.repo.is_path_ignored(&entry_relative).unwrap_or(false);
+
+                // Skip ignored files unless show_ignored is true
+                if is_ignored && !show_ignored {
+                    continue;
+                }
+
                 if entry.path().is_dir() {
-                    let children = self.build_file_tree(base_path, &entry_relative, status_map)?;
-                    let mut dir_entry = FileTreeEntry::new_dir(name, entry_relative);
-                    dir_entry.children = children;
+                    // Don't recurse - just create the directory entry
+                    // Children will be loaded lazily when expanded
+                    let mut dir_entry = FileTreeEntry::new_dir(name, entry_relative.clone());
+                    if is_ignored {
+                        dir_entry.status = Some(FileTreeStatus::Ignored);
+                    } else {
+                        // Check if any file under this directory has git status
+                        // by looking for paths that start with this directory
+                        let dir_prefix = format!("{}/", entry_relative);
+                        let dir_status = self.get_dir_status(&status_map, &dir_prefix);
+                        dir_entry.status = dir_status;
+                    }
+                    // Check if directory has children (for icon display)
+                    if let Ok(mut sub_read) = std::fs::read_dir(entry.path()) {
+                        dir_entry.children = if sub_read.next().is_some() {
+                            // Has at least one child - use placeholder
+                            vec![FileTreeEntry::new_file("...".to_string(), "".to_string(), None)]
+                        } else {
+                            Vec::new()
+                        };
+                    }
                     entries.push(dir_entry);
                 } else {
-                    let status = status_map.get(&entry_relative).copied();
+                    let status = if is_ignored {
+                        Some(FileTreeStatus::Ignored)
+                    } else {
+                        status_map.get(&entry_relative).copied()
+                    };
                     entries.push(FileTreeEntry::new_file(name, entry_relative, status));
                 }
             }
@@ -796,6 +859,43 @@ impl Repository {
         });
 
         Ok(entries)
+    }
+
+    // Get aggregated status for a directory based on files inside it
+    fn get_dir_status(
+        &self,
+        status_map: &std::collections::HashMap<String, FileTreeStatus>,
+        dir_prefix: &str,
+    ) -> Option<FileTreeStatus> {
+        let mut has_modified = false;
+        let mut has_added = false;
+        let mut has_deleted = false;
+        let mut has_untracked = false;
+
+        for (path, status) in status_map {
+            if path.starts_with(dir_prefix) {
+                match status {
+                    FileTreeStatus::Modified => has_modified = true,
+                    FileTreeStatus::Added => has_added = true,
+                    FileTreeStatus::Deleted => has_deleted = true,
+                    FileTreeStatus::Untracked => has_untracked = true,
+                    FileTreeStatus::Ignored => {}
+                }
+            }
+        }
+
+        // Priority: Modified > Added > Deleted > Untracked
+        if has_modified {
+            Some(FileTreeStatus::Modified)
+        } else if has_added {
+            Some(FileTreeStatus::Added)
+        } else if has_deleted {
+            Some(FileTreeStatus::Deleted)
+        } else if has_untracked {
+            Some(FileTreeStatus::Untracked)
+        } else {
+            None
+        }
     }
 
     // Conflict operations
