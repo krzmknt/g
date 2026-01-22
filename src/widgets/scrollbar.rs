@@ -16,6 +16,7 @@ impl Scrollbar {
     }
 
     /// Render a vertical scrollbar on the right edge of the given area
+    /// Uses Unicode box-drawing characters for a rich appearance
     pub fn render(&self, area: Rect, buf: &mut Buffer, style: Style) {
         if self.total_items == 0 || self.visible_items >= self.total_items {
             // No scrollbar needed - just draw empty track
@@ -43,12 +44,14 @@ impl Scrollbar {
 
         let x = area.x;
 
-        // Draw track and thumb using ASCII characters
+        // Unicode characters for scrollbar
+        const TRACK_CHAR: &str = "│";
+        const THUMB_CHAR: &str = "█";
+
         for i in 0..track_height {
             let y = area.y + i as u16;
             let is_thumb = i >= thumb_position && i < thumb_position + thumb_height;
-            // Use '#' for thumb, '|' for track
-            let symbol = if is_thumb { "#" } else { "|" };
+            let symbol = if is_thumb { THUMB_CHAR } else { TRACK_CHAR };
             buf.set_string(x, y, symbol, style);
         }
     }

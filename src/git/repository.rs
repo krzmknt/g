@@ -1023,7 +1023,7 @@ impl Repository {
                 short_id: oid.to_string()[..7].to_string(),
                 message: commit.summary().unwrap_or("").to_string(),
                 author: commit.author().name().unwrap_or("").to_string(),
-                date: format_timestamp(commit.time().seconds()),
+                time: commit.time().seconds(),
                 parents,
                 graph_chars,
                 refs,

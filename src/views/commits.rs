@@ -233,7 +233,7 @@ impl CommitsView {
             CommitsViewMode::Graph => {
                 self.graph_commits.iter().map(|c| {
                     let refs_len = if c.refs.is_empty() { 0 } else { c.refs.join(", ").len() + 3 };
-                    c.graph_chars.len() + refs_len + c.short_id.len() + 1 + c.author.len() + 3 + c.message.chars().count()
+                    c.graph_chars.len() + refs_len + c.short_id.len() + 1 + c.author.len() + 3 + c.message.chars().count() + 1 + c.relative_time().len()
                 }).max().unwrap_or(0)
             }
         } + 2;  // +2 for scrollbar (1) + margin (1)
@@ -266,24 +266,61 @@ impl CommitsView {
             let is_selected = self.selected == self.offset + i;
             let is_search_match = self.search_results.contains(&(self.offset + i));
 
+            let base_style = if is_selected && focused {
+                Style::new().fg(theme.selection_text).bg(theme.selection)
+            } else if is_search_match {
+                Style::new().fg(theme.diff_hunk)
+            } else {
+                Style::new().fg(theme.foreground)
+            };
+
             // Fill full line width when selected and focused
             if is_selected && focused {
                 let blank_line = " ".repeat(content_width as usize);
-                buf.set_string(inner.x, y, &blank_line, Style::new().bg(theme.selection));
+                buf.set_string(inner.x, y, &blank_line, base_style);
             }
 
-            // Build segments: (text, color)
+            // Build left part: hash + message (without time)
             let time_str = commit.relative_time();
-            let segments: Vec<(&str, crate::tui::Color)> = vec![
-                (&commit.short_id, theme.commit_hash),
-                (" ", theme.foreground),
-                (&commit.message, theme.commit_message),
-                (" ", theme.foreground),
-                (&time_str, theme.commit_time),
-            ];
+            let left_part = format!("{} {}", commit.short_id, commit.message);
 
-            // Render with colors (respecting h_offset and selection)
-            self.render_colored_line(buf, inner.x, y, content_width, &segments, is_selected && focused, is_search_match, theme);
+            // Calculate positions for right-aligned time
+            let time_len = time_str.chars().count();
+
+            // Apply horizontal scroll to left part
+            let display_left: String = left_part.chars().skip(self.h_offset).collect();
+            buf.set_string_truncated(inner.x, y, &display_left, content_width.saturating_sub(time_len as u16 + 1), base_style);
+
+            // Right-align time (gray)
+            if self.h_offset == 0 {
+                let time_x = inner.x + content_width.saturating_sub(time_len as u16);
+                let time_style = if is_selected && focused {
+                    base_style
+                } else {
+                    Style::new().fg(theme.commit_time)
+                };
+                buf.set_string(time_x, y, &time_str, time_style);
+            }
+
+            // Overlay colored parts if not selected
+            if !(is_selected && focused) && !is_search_match {
+                self.render_compact_colors(buf, inner.x, y, content_width.saturating_sub(time_len as u16 + 1), commit, theme);
+            }
+        }
+    }
+
+    fn render_compact_colors(&self, buf: &mut Buffer, x: u16, y: u16, width: u16, commit: &CommitInfo, theme: &Theme) {
+        let hash_len = commit.short_id.chars().count();
+
+        // Calculate visible portion after h_offset
+        if self.h_offset < hash_len {
+            let visible_start = self.h_offset;
+            let hash_part: String = commit.short_id.chars().skip(visible_start).collect();
+            let hash_display_len = hash_part.chars().count().min(width as usize);
+            if hash_display_len > 0 {
+                let truncated: String = hash_part.chars().take(hash_display_len).collect();
+                buf.set_string(x, y, &truncated, Style::new().fg(theme.commit_hash));
+            }
         }
     }
 
@@ -293,43 +330,134 @@ impl CommitsView {
             let is_selected = self.selected == self.offset + i;
             let is_search_match = self.search_results.contains(&(self.offset + i));
 
+            let base_style = if is_selected && focused {
+                Style::new().fg(theme.selection_text).bg(theme.selection)
+            } else if is_search_match {
+                Style::new().fg(theme.diff_hunk)
+            } else {
+                Style::new().fg(theme.foreground)
+            };
+
             // Fill full line width when selected and focused
             if is_selected && focused {
                 let blank_line = " ".repeat(content_width as usize);
-                buf.set_string(inner.x, y, &blank_line, Style::new().bg(theme.selection));
+                buf.set_string(inner.x, y, &blank_line, base_style);
             }
 
-            // Build segments: hash + refs + author + message + time
+            // Build refs with [] and categorize by type
             let refs_str = if !commit.refs.is_empty() {
-                format!("({}) ", commit.refs.join(", "))
+                format!("[{}] ", commit.refs.join(", "))
             } else {
                 String::new()
             };
             let author_truncated: String = commit.author.chars().take(15).collect();
             let time_str = commit.relative_time();
+            let time_len = time_str.chars().count();
 
-            // Use owned strings for segments that need formatting
-            let segments_owned: Vec<(String, crate::tui::Color)> = vec![
-                (commit.short_id.clone(), theme.commit_hash),
-                (" ".to_string(), theme.foreground),
-                (refs_str, theme.commit_refs),
-                (author_truncated, theme.commit_author),
-                (" ".to_string(), theme.foreground),
-                (commit.message.clone(), theme.commit_message),
-                (" ".to_string(), theme.foreground),
-                (time_str, theme.commit_time),
-            ];
+            // Build left part (without time)
+            let left_part = format!("{} {}{} {}", commit.short_id, refs_str, author_truncated, commit.message);
 
-            // Convert to references for rendering
-            let segments: Vec<(&str, crate::tui::Color)> = segments_owned.iter()
-                .map(|(s, c)| (s.as_str(), *c))
-                .collect();
+            // Apply horizontal scroll to left part
+            let display_left: String = left_part.chars().skip(self.h_offset).collect();
+            buf.set_string_truncated(inner.x, y, &display_left, content_width.saturating_sub(time_len as u16 + 1), base_style);
 
-            self.render_colored_line(buf, inner.x, y, content_width, &segments, is_selected && focused, is_search_match, theme);
+            // Right-align time (gray)
+            if self.h_offset == 0 {
+                let time_x = inner.x + content_width.saturating_sub(time_len as u16);
+                let time_style = if is_selected && focused {
+                    base_style
+                } else {
+                    Style::new().fg(theme.commit_time)
+                };
+                buf.set_string(time_x, y, &time_str, time_style);
+            }
+
+            // Overlay colored parts if not selected
+            if !(is_selected && focused) && !is_search_match {
+                self.render_detailed_colors(buf, inner.x, y, content_width.saturating_sub(time_len as u16 + 1), commit, &refs_str, &author_truncated, theme);
+            }
         }
     }
 
+    fn render_detailed_colors(&self, buf: &mut Buffer, x: u16, y: u16, width: u16, commit: &CommitInfo, refs_str: &str, author: &str, theme: &Theme) {
+        let hash_len = commit.short_id.chars().count();
+        let refs_len = refs_str.chars().count();
+        let author_len = author.chars().count();
+
+        // Hash (cyan)
+        if self.h_offset < hash_len {
+            let start = self.h_offset;
+            let part: String = commit.short_id.chars().skip(start).collect();
+            let display_len = part.chars().count().min(width as usize);
+            if display_len > 0 {
+                let truncated: String = part.chars().take(display_len).collect();
+                buf.set_string(x, y, &truncated, Style::new().fg(theme.commit_hash));
+            }
+        }
+
+        // Refs with branch-type coloring
+        let pos = hash_len + 1; // after hash + space
+        if refs_len > 0 && self.h_offset < pos + refs_len {
+            let start = self.h_offset.saturating_sub(pos);
+            let screen_offset = if self.h_offset > pos { 0 } else { pos - self.h_offset };
+            if screen_offset < width as usize && start < refs_len {
+                // Determine ref color based on content
+                let ref_color = self.get_ref_color(&commit.refs, theme);
+                let part: String = refs_str.chars().skip(start).collect();
+                let max_len = (width as usize).saturating_sub(screen_offset);
+                let display_len = part.chars().count().min(max_len);
+                if display_len > 0 {
+                    let truncated: String = part.chars().take(display_len).collect();
+                    buf.set_string(x + screen_offset as u16, y, &truncated, Style::new().fg(ref_color));
+                }
+            }
+        }
+
+        // Author (gray)
+        let pos2 = pos + refs_len;
+        if self.h_offset < pos2 + author_len {
+            let start = self.h_offset.saturating_sub(pos2);
+            let screen_offset = if self.h_offset > pos2 { 0 } else { pos2 - self.h_offset };
+            if screen_offset < width as usize && start < author_len {
+                let part: String = author.chars().skip(start).collect();
+                let max_len = (width as usize).saturating_sub(screen_offset);
+                let display_len = part.chars().count().min(max_len);
+                if display_len > 0 {
+                    let truncated: String = part.chars().take(display_len).collect();
+                    buf.set_string(x + screen_offset as u16, y, &truncated, Style::new().fg(theme.commit_author));
+                }
+            }
+        }
+    }
+
+    fn get_ref_color(&self, refs: &[String], theme: &Theme) -> crate::tui::Color {
+        // Check if any ref is HEAD or current branch (green)
+        for r in refs {
+            if r == "HEAD" || r.starts_with("HEAD ->") {
+                return theme.branch_current;
+            }
+        }
+        // Check if any ref is remote (purple)
+        for r in refs {
+            if r.contains('/') || r.starts_with("origin") || r.starts_with("upstream") {
+                return theme.branch_remote;
+            }
+        }
+        // Default to local branch color (blue)
+        theme.branch_local
+    }
+
     fn render_graph(&self, inner: Rect, buf: &mut Buffer, theme: &Theme, height: usize, content_width: u16, focused: bool) {
+        // Graph colors for different branches
+        let graph_colors = [
+            crate::tui::Color::Rgb(243, 139, 168),  // red
+            crate::tui::Color::Rgb(166, 227, 161),  // green
+            crate::tui::Color::Rgb(249, 226, 175),  // yellow
+            crate::tui::Color::Rgb(137, 180, 250),  // blue
+            crate::tui::Color::Rgb(203, 166, 247),  // mauve
+            crate::tui::Color::Rgb(137, 220, 235),  // cyan
+        ];
+
         if self.graph_commits.is_empty() {
             let msg = "No commits";
             let x = inner.x + (inner.width.saturating_sub(msg.len() as u16)) / 2;
@@ -343,78 +471,151 @@ impl CommitsView {
             let is_selected = self.selected == self.offset + i;
             let is_search_match = self.search_results.contains(&(self.offset + i));
 
+            let base_style = if is_selected && focused {
+                Style::new().fg(theme.selection_text).bg(theme.selection)
+            } else if is_search_match {
+                Style::new().fg(theme.diff_hunk)
+            } else {
+                Style::new().fg(theme.foreground)
+            };
+
             // Fill full line width when selected and focused
             if is_selected && focused {
                 let blank_line = " ".repeat(content_width as usize);
-                buf.set_string(inner.x, y, &blank_line, Style::new().bg(theme.selection));
+                buf.set_string(inner.x, y, &blank_line, base_style);
             }
 
-            // Build segments: graph + refs + hash + author + message
+            // Build refs with [] and categorize by type
             let refs_str = if !commit.refs.is_empty() {
-                format!("({}) ", commit.refs.join(", "))
+                format!(" [{}]", commit.refs.join(", "))
             } else {
                 String::new()
             };
 
-            let segments_owned: Vec<(String, crate::tui::Color)> = vec![
-                (commit.graph_chars.clone(), theme.diff_hunk),
-                (refs_str, theme.commit_refs),
-                (commit.short_id.clone(), theme.commit_hash),
-                (" ".to_string(), theme.foreground),
-                (commit.author.clone(), theme.commit_author),
-                (" - ".to_string(), theme.foreground),
-                (commit.message.clone(), theme.commit_message),
-            ];
+            // Get time for right-align
+            let time_str = commit.relative_time();
+            let time_len = time_str.chars().count();
 
-            let segments: Vec<(&str, crate::tui::Color)> = segments_owned.iter()
-                .map(|(s, c)| (s.as_str(), *c))
-                .collect();
+            // Build left part: graph + hash + refs + author + message (without time)
+            let left_part = format!("{}{}{} {} - {}", commit.graph_chars, commit.short_id, refs_str, commit.author, commit.message);
 
-            self.render_colored_line(buf, inner.x, y, content_width, &segments, is_selected && focused, is_search_match, theme);
+            // Apply horizontal scroll to left part
+            let display_left: String = left_part.chars().skip(self.h_offset).collect();
+            buf.set_string_truncated(inner.x, y, &display_left, content_width.saturating_sub(time_len as u16 + 1), base_style);
+
+            // Right-align time (gray)
+            if self.h_offset == 0 {
+                let time_x = inner.x + content_width.saturating_sub(time_len as u16);
+                let time_style = if is_selected && focused {
+                    base_style
+                } else {
+                    Style::new().fg(theme.commit_time)
+                };
+                buf.set_string(time_x, y, &time_str, time_style);
+            }
+
+            // Overlay colored parts if not selected
+            if !(is_selected && focused) && !is_search_match {
+                self.render_graph_colors(buf, inner.x, y, content_width.saturating_sub(time_len as u16 + 1), commit, &refs_str, theme, &graph_colors);
+            }
         }
     }
 
-    /// Render a line with multiple colored segments, respecting horizontal scroll
-    fn render_colored_line(
-        &self,
-        buf: &mut Buffer,
-        x: u16,
-        y: u16,
-        width: u16,
-        segments: &[(&str, crate::tui::Color)],
-        is_selected: bool,
-        is_search_match: bool,
-        theme: &Theme,
-    ) {
-        let mut current_x = x;
-        let mut chars_skipped = 0;
-        let max_x = x + width;
+    fn render_graph_colors(&self, buf: &mut Buffer, x: u16, y: u16, width: u16, commit: &GraphCommit, refs_str: &str, theme: &Theme, graph_colors: &[crate::tui::Color]) {
+        let graph_len = commit.graph_chars.chars().count();
+        let hash_len = commit.short_id.chars().count();
+        let refs_len = refs_str.chars().count();
+        let author_len = commit.author.chars().count();
 
-        for (text, color) in segments {
-            for ch in text.chars() {
-                // Skip characters for horizontal scroll
-                if chars_skipped < self.h_offset {
-                    chars_skipped += 1;
+        let mut pos = 0;
+
+        // Graph (colorful - based on column position)
+        if self.h_offset < pos + graph_len {
+            let start = self.h_offset.saturating_sub(pos);
+            let screen_offset = if self.h_offset > pos { 0 } else { pos - self.h_offset };
+            for (ci, ch) in commit.graph_chars.chars().enumerate() {
+                if ci < start {
                     continue;
                 }
-
-                // Stop if we've exceeded the width
-                if current_x >= max_x {
-                    return;
+                let screen_pos = screen_offset + (ci - start);
+                if screen_pos >= width as usize {
+                    break;
                 }
-
-                // Determine style based on selection state
-                let style = if is_selected {
-                    Style::new().fg(theme.selection_text).bg(theme.selection)
-                } else if is_search_match {
-                    Style::new().fg(theme.diff_hunk)
+                // Color based on character position (column)
+                let color = if ch == '*' || ch == '|' || ch == '/' || ch == '\\' || ch == '_' {
+                    graph_colors[ci % graph_colors.len()]
                 } else {
-                    Style::new().fg(*color)
+                    theme.foreground
                 };
-
-                buf.set_string(current_x, y, &ch.to_string(), style);
-                current_x += 1;
+                buf.set_string(x + screen_pos as u16, y, &ch.to_string(), Style::new().fg(color));
             }
         }
+        pos += graph_len;
+
+        // Hash (cyan) - now comes after graph
+        if self.h_offset < pos + hash_len {
+            let start = self.h_offset.saturating_sub(pos);
+            let screen_offset = if self.h_offset > pos { 0 } else { pos - self.h_offset };
+            if screen_offset < width as usize && start < hash_len {
+                let part: String = commit.short_id.chars().skip(start).collect();
+                let max_len = (width as usize).saturating_sub(screen_offset);
+                let display_len = part.chars().count().min(max_len);
+                if display_len > 0 {
+                    let truncated: String = part.chars().take(display_len).collect();
+                    buf.set_string(x + screen_offset as u16, y, &truncated, Style::new().fg(theme.commit_hash));
+                }
+            }
+        }
+        pos += hash_len;
+
+        // Refs with branch-type coloring - now comes after hash
+        if refs_len > 0 && self.h_offset < pos + refs_len {
+            let start = self.h_offset.saturating_sub(pos);
+            let screen_offset = if self.h_offset > pos { 0 } else { pos - self.h_offset };
+            if screen_offset < width as usize && start < refs_len {
+                // Determine ref color based on content
+                let ref_color = self.get_graph_ref_color(&commit.refs, theme);
+                let part: String = refs_str.chars().skip(start).collect();
+                let max_len = (width as usize).saturating_sub(screen_offset);
+                let display_len = part.chars().count().min(max_len);
+                if display_len > 0 {
+                    let truncated: String = part.chars().take(display_len).collect();
+                    buf.set_string(x + screen_offset as u16, y, &truncated, Style::new().fg(ref_color));
+                }
+            }
+        }
+        pos += refs_len + 1; // +1 for space before author
+
+        // Author (gray)
+        if self.h_offset < pos + author_len {
+            let start = self.h_offset.saturating_sub(pos);
+            let screen_offset = if self.h_offset > pos { 0 } else { pos - self.h_offset };
+            if screen_offset < width as usize && start < author_len {
+                let part: String = commit.author.chars().skip(start).collect();
+                let max_len = (width as usize).saturating_sub(screen_offset);
+                let display_len = part.chars().count().min(max_len);
+                if display_len > 0 {
+                    let truncated: String = part.chars().take(display_len).collect();
+                    buf.set_string(x + screen_offset as u16, y, &truncated, Style::new().fg(theme.commit_author));
+                }
+            }
+        }
+    }
+
+    fn get_graph_ref_color(&self, refs: &[String], theme: &Theme) -> crate::tui::Color {
+        // Check if any ref is HEAD or current branch (green)
+        for r in refs {
+            if r == "HEAD" || r.starts_with("HEAD ->") {
+                return theme.branch_current;
+            }
+        }
+        // Check if any ref is remote (purple)
+        for r in refs {
+            if r.contains('/') || r.starts_with("origin") || r.starts_with("upstream") {
+                return theme.branch_remote;
+            }
+        }
+        // Default to local branch color (blue)
+        theme.branch_local
     }
 }
