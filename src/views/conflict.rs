@@ -1,6 +1,6 @@
+use crate::config::Theme;
 use crate::git::ConflictEntry;
 use crate::tui::{Buffer, Rect, Style};
-use crate::config::Theme;
 use crate::widgets::{Block, Borders, Scrollbar, Widget};
 
 pub struct ConflictView {
@@ -32,8 +32,8 @@ impl ConflictView {
         if self.view_width == 0 {
             return self.max_content_width > 0;
         }
-        self.max_content_width > self.view_width &&
-            self.h_offset < self.max_content_width.saturating_sub(self.view_width)
+        self.max_content_width > self.view_width
+            && self.h_offset < self.max_content_width.saturating_sub(self.view_width)
     }
 
     pub fn scroll_left(&mut self) {
@@ -77,8 +77,19 @@ impl ConflictView {
         }
     }
 
+    pub fn select_at_row(&mut self, row: usize) {
+        let index = self.offset + row;
+        if index < self.conflicts.len() {
+            self.selected = index;
+        }
+    }
+
     pub fn render(&mut self, area: Rect, buf: &mut Buffer, theme: &Theme, focused: bool) {
-        let border_color = if focused { theme.border_focused } else { theme.border_unfocused };
+        let border_color = if focused {
+            theme.border_focused
+        } else {
+            theme.border_unfocused
+        };
 
         let title = format!(" Conflicts ({}) ", self.conflicts.len());
 
@@ -106,9 +117,17 @@ impl ConflictView {
 
         // Calculate max content width and store view width
         self.view_width = content_width as usize;
-        self.max_content_width = self.conflicts.iter().map(|conflict| {
-            format!(" {} ({})", conflict.path, conflict.conflict_type).chars().count()
-        }).max().unwrap_or(0) + 2; // +2 for scrollbar (1) + margin (1)
+        self.max_content_width = self
+            .conflicts
+            .iter()
+            .map(|conflict| {
+                format!(" {} ({})", conflict.path, conflict.conflict_type)
+                    .chars()
+                    .count()
+            })
+            .max()
+            .unwrap_or(0)
+            + 2; // +2 for scrollbar (1) + margin (1)
 
         // Clamp h_offset
         if self.max_content_width <= self.view_width {
@@ -126,7 +145,13 @@ impl ConflictView {
             let y = inner.y + inner.height / 2;
             buf.set_string(x, y, msg, Style::new().fg(theme.staged));
         } else {
-            for (i, conflict) in self.conflicts.iter().skip(self.offset).take(height).enumerate() {
+            for (i, conflict) in self
+                .conflicts
+                .iter()
+                .skip(self.offset)
+                .take(height)
+                .enumerate()
+            {
                 let y = inner.y + i as u16;
                 let is_selected = self.selected == self.offset + i;
 

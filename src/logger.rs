@@ -33,7 +33,14 @@ fn timestamp() -> String {
 pub fn log(module: &str, level: &str, message: &str) {
     let mut guard = LOG_FILE.lock().unwrap();
     if let Some(ref mut file) = *guard {
-        let _ = writeln!(file, "[{}] [{}] [{}] {}", timestamp(), level, module, message);
+        let _ = writeln!(
+            file,
+            "[{}] [{}] [{}] {}",
+            timestamp(),
+            level,
+            module,
+            message
+        );
         let _ = file.flush();
     }
 }

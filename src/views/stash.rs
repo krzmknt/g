@@ -1,6 +1,6 @@
+use crate::config::Theme;
 use crate::git::StashEntry;
 use crate::tui::{Buffer, Rect, Style};
-use crate::config::Theme;
 use crate::widgets::{Block, Borders, Scrollbar, Widget};
 
 pub struct StashView {
@@ -10,6 +10,8 @@ pub struct StashView {
     pub h_offset: usize,
     pub max_content_width: usize,
     pub view_width: usize,
+    pub search_query: Option<String>,
+    pub search_results: Vec<usize>,
 }
 
 impl StashView {
@@ -21,6 +23,8 @@ impl StashView {
             h_offset: 0,
             max_content_width: 0,
             view_width: 0,
+            search_query: None,
+            search_results: Vec::new(),
         }
     }
 
@@ -32,8 +36,8 @@ impl StashView {
         if self.view_width == 0 {
             return self.max_content_width > 0;
         }
-        self.max_content_width > self.view_width &&
-            self.h_offset < self.max_content_width.saturating_sub(self.view_width)
+        self.max_content_width > self.view_width
+            && self.h_offset < self.max_content_width.saturating_sub(self.view_width)
     }
 
     pub fn scroll_left(&mut self) {
@@ -77,8 +81,68 @@ impl StashView {
         }
     }
 
+    pub fn select_at_row(&mut self, row: usize) {
+        let index = self.offset + row;
+        if index < self.stashes.len() {
+            self.selected = index;
+        }
+    }
+
+    pub fn search(&mut self, query: &str) {
+        self.search_query = Some(query.to_string());
+        self.search_results.clear();
+
+        let query_lower = query.to_lowercase();
+
+        for (i, stash) in self.stashes.iter().enumerate() {
+            if stash.message.to_lowercase().contains(&query_lower) {
+                self.search_results.push(i);
+            }
+        }
+
+        // Jump to first result
+        if let Some(&first) = self.search_results.first() {
+            self.selected = first;
+        }
+    }
+
+    pub fn clear_search(&mut self) {
+        self.search_query = None;
+        self.search_results.clear();
+    }
+
+    pub fn next_search_result(&mut self) {
+        if self.search_results.is_empty() {
+            return;
+        }
+
+        if let Some(pos) = self.search_results.iter().position(|&i| i > self.selected) {
+            self.selected = self.search_results[pos];
+        } else {
+            // Wrap around
+            self.selected = self.search_results[0];
+        }
+    }
+
+    pub fn prev_search_result(&mut self) {
+        if self.search_results.is_empty() {
+            return;
+        }
+
+        if let Some(pos) = self.search_results.iter().rposition(|&i| i < self.selected) {
+            self.selected = self.search_results[pos];
+        } else {
+            // Wrap around
+            self.selected = *self.search_results.last().unwrap();
+        }
+    }
+
     pub fn render(&mut self, area: Rect, buf: &mut Buffer, theme: &Theme, focused: bool) {
-        let border_color = if focused { theme.border_focused } else { theme.border_unfocused };
+        let border_color = if focused {
+            theme.border_focused
+        } else {
+            theme.border_unfocused
+        };
 
         let title = format!(" Stash ({}) ", self.stashes.len());
 
@@ -107,9 +171,17 @@ impl StashView {
 
         // Calculate max content width and store view width
         self.view_width = content_width as usize;
-        self.max_content_width = self.stashes.iter().map(|stash| {
-            format!("stash@{{{}}} {}", stash.index, stash.message).chars().count()
-        }).max().unwrap_or(0) + 2; // +2 for scrollbar (1) + margin (1)
+        self.max_content_width = self
+            .stashes
+            .iter()
+            .map(|stash| {
+                format!("stash@{{{}}} {}", stash.index, stash.message)
+                    .chars()
+                    .count()
+            })
+            .max()
+            .unwrap_or(0)
+            + 2; // +2 for scrollbar (1) + margin (1)
 
         // Clamp h_offset
         if self.max_content_width <= self.view_width {
@@ -127,12 +199,21 @@ impl StashView {
             let y = inner.y + inner.height / 2;
             buf.set_string(x, y, msg, Style::new().fg(theme.untracked));
         } else {
-            for (i, stash) in self.stashes.iter().skip(self.offset).take(height).enumerate() {
+            for (i, stash) in self
+                .stashes
+                .iter()
+                .skip(self.offset)
+                .take(height)
+                .enumerate()
+            {
                 let y = inner.y + i as u16;
                 let is_selected = self.selected == self.offset + i;
+                let is_search_match = self.search_results.contains(&(self.offset + i));
 
                 let style = if is_selected && focused {
                     Style::new().fg(theme.selection_text).bg(theme.selection)
+                } else if is_search_match {
+                    Style::new().fg(theme.diff_hunk)
                 } else {
                     Style::new().fg(theme.foreground)
                 };

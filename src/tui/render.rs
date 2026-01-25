@@ -8,7 +8,12 @@ pub struct Rect {
 
 impl Rect {
     pub const fn new(x: u16, y: u16, width: u16, height: u16) -> Self {
-        Self { x, y, width, height }
+        Self {
+            x,
+            y,
+            width,
+            height,
+        }
     }
 
     pub const fn area(&self) -> u16 {
@@ -81,7 +86,12 @@ impl Rect {
         let at = at.min(self.height);
         (
             Rect::new(self.x, self.y, self.width, at),
-            Rect::new(self.x, self.y + at, self.width, self.height.saturating_sub(at)),
+            Rect::new(
+                self.x,
+                self.y + at,
+                self.width,
+                self.height.saturating_sub(at),
+            ),
         )
     }
 
@@ -90,7 +100,12 @@ impl Rect {
         let at = at.min(self.width);
         (
             Rect::new(self.x, self.y, at, self.height),
-            Rect::new(self.x + at, self.y, self.width.saturating_sub(at), self.height),
+            Rect::new(
+                self.x + at,
+                self.y,
+                self.width.saturating_sub(at),
+                self.height,
+            ),
         )
     }
 }

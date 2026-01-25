@@ -1,13 +1,50 @@
+mod layout;
 mod parser;
 mod theme;
-mod layout;
 
+pub use layout::{Column, LayoutConfig, PanelHeight};
 pub use theme::Theme;
-pub use layout::{LayoutConfig, Column, PanelHeight};
 
-use std::path::PathBuf;
-use std::collections::HashMap;
 use crate::error::Result;
+use std::collections::HashMap;
+use std::path::PathBuf;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DefaultDiffMode {
+    Inline,
+    Split,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DefaultCommitsMode {
+    Compact,
+    Detailed,
+    Graph,
+}
+
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DefaultBranchesMode {
+    List,
+    Graph,
+}
+
+#[derive(Debug, Clone)]
+pub struct ViewDefaults {
+    pub diff_mode: DefaultDiffMode,
+    pub commits_mode: DefaultCommitsMode,
+    pub branches_mode: DefaultBranchesMode,
+}
+
+impl Default for ViewDefaults {
+    fn default() -> Self {
+        Self {
+            diff_mode: DefaultDiffMode::Split,
+            commits_mode: DefaultCommitsMode::Graph,
+            branches_mode: DefaultBranchesMode::Graph,
+        }
+    }
+}
 
 #[derive(Debug, Clone)]
 pub struct Config {
@@ -16,12 +53,16 @@ pub struct Config {
     pub diff_context_lines: u32,
     pub max_commits: usize,
     pub date_format: DateFormat,
+    /// Git data refresh interval in seconds (status, branches). 0 = disabled.
     pub auto_refresh: u32,
+    /// GitHub API refresh interval in seconds (PRs, Issues, Actions, Releases). 0 = disabled.
+    pub github_refresh_interval: u64,
     pub confirm_destructive: bool,
     pub editor: Option<String>,
     pub keybindings: HashMap<String, Vec<String>>,
     pub git: GitConfig,
     pub layout: LayoutConfig,
+    pub view_defaults: ViewDefaults,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -46,12 +87,14 @@ impl Default for Config {
             diff_context_lines: 3,
             max_commits: 1000,
             date_format: DateFormat::Relative,
-            auto_refresh: 0,
+            auto_refresh: 60, // Default: refresh git data every 60 seconds
+            github_refresh_interval: 60, // Default: refresh every 60 seconds
             confirm_destructive: true,
             editor: None,
             keybindings: HashMap::new(),
             git: GitConfig::default(),
             layout: LayoutConfig::default(),
+            view_defaults: ViewDefaults::default(),
         }
     }
 }
@@ -88,7 +131,10 @@ impl Config {
         #[cfg(not(windows))]
         {
             let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
-            PathBuf::from(home).join(".config").join("g").join("config.toml")
+            PathBuf::from(home)
+                .join(".config")
+                .join("g")
+                .join("config.toml")
         }
     }
 
@@ -121,6 +167,10 @@ impl Config {
             config.auto_refresh = *n as u32;
         }
 
+        if let Some(parser::Value::Integer(n)) = toml.get("github_refresh_interval") {
+            config.github_refresh_interval = *n as u64;
+        }
+
         if let Some(parser::Value::Boolean(b)) = toml.get("confirm_destructive") {
             config.confirm_destructive = *b;
         }
@@ -132,6 +182,32 @@ impl Config {
         // Parse layout config
         config.layout = LayoutConfig::from_toml(&toml);
 
+        // Parse view defaults
+        if let Some(parser::Value::Table(views)) = toml.get("views") {
+            if let Some(parser::Value::String(s)) = views.get("diff_mode") {
+                config.view_defaults.diff_mode = match s.as_str() {
+                    "inline" => DefaultDiffMode::Inline,
+                    "split" | "side_by_side" => DefaultDiffMode::Split,
+                    _ => DefaultDiffMode::Split,
+                };
+            }
+            if let Some(parser::Value::String(s)) = views.get("commits_mode") {
+                config.view_defaults.commits_mode = match s.as_str() {
+                    "compact" => DefaultCommitsMode::Compact,
+                    "detailed" => DefaultCommitsMode::Detailed,
+                    "graph" => DefaultCommitsMode::Graph,
+                    _ => DefaultCommitsMode::Compact,
+                };
+            }
+            if let Some(parser::Value::String(s)) = views.get("branches_mode") {
+                config.view_defaults.branches_mode = match s.as_str() {
+                    "list" => DefaultBranchesMode::List,
+                    "graph" => DefaultBranchesMode::Graph,
+                    _ => DefaultBranchesMode::Graph,
+                };
+            }
+        }
+
         Ok(config)
     }
 
@@ -140,7 +216,8 @@ impl Config {
     }
 
     pub fn editor(&self) -> String {
-        self.editor.clone()
+        self.editor
+            .clone()
             .or_else(|| std::env::var("VISUAL").ok())
             .or_else(|| std::env::var("EDITOR").ok())
             .unwrap_or_else(|| "vi".to_string())

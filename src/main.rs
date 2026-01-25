@@ -4,14 +4,14 @@
 
 #[macro_use]
 mod logger;
-mod error;
-mod tui;
-mod input;
-mod git;
-mod config;
-mod widgets;
-mod views;
 mod app;
+mod config;
+mod error;
+mod git;
+mod input;
+mod tui;
+mod views;
+mod widgets;
 
 use app::App;
 use error::Result;

@@ -8,6 +8,14 @@ pub struct BranchInfo {
     pub last_commit: CommitInfo,
     pub ahead: usize,
     pub behind: usize,
+    /// Upstream tracking branch name (e.g., "origin/feature/hoge")
+    pub upstream: Option<UpstreamInfo>,
+}
+
+#[derive(Debug, Clone)]
+pub struct UpstreamInfo {
+    pub name: String,
+    pub short_id: String,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

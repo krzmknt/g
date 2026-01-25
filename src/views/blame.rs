@@ -1,6 +1,6 @@
+use crate::config::Theme;
 use crate::git::BlameInfo;
 use crate::tui::{Buffer, Rect, Style};
-use crate::config::Theme;
 use crate::widgets::{Block, Borders, Scrollbar, Widget};
 
 pub struct BlameView {
@@ -32,8 +32,8 @@ impl BlameView {
         if self.view_width == 0 {
             return self.max_content_width > 0;
         }
-        self.max_content_width > self.view_width &&
-            self.h_offset < self.max_content_width.saturating_sub(self.view_width)
+        self.max_content_width > self.view_width
+            && self.h_offset < self.max_content_width.saturating_sub(self.view_width)
     }
 
     pub fn scroll_left(&mut self) {
@@ -84,8 +84,21 @@ impl BlameView {
         }
     }
 
+    pub fn select_at_row(&mut self, row: usize) {
+        if let Some(ref blame) = self.blame {
+            let index = self.offset + row;
+            if index < blame.lines.len() {
+                self.selected = index;
+            }
+        }
+    }
+
     pub fn render(&mut self, area: Rect, buf: &mut Buffer, theme: &Theme, focused: bool) {
-        let border_color = if focused { theme.border_focused } else { theme.border_unfocused };
+        let border_color = if focused {
+            theme.border_focused
+        } else {
+            theme.border_unfocused
+        };
 
         let title = match &self.blame {
             Some(blame) => format!(" Blame: {} ", blame.path),
@@ -124,16 +137,21 @@ impl BlameView {
 
         // Calculate max content width and store view width
         self.view_width = content_width as usize;
-        self.max_content_width = blame.lines.iter().map(|line| {
-            let author_display: String = line.author.chars().take(8).collect();
-            format!("{} {:8} {} | {:4} | {}",
-                line.commit_id,
-                author_display,
-                line.date,
-                line.line_number,
-                line.content
-            ).chars().count()
-        }).max().unwrap_or(0) + 2; // +2 for scrollbar (1) + margin (1)
+        self.max_content_width = blame
+            .lines
+            .iter()
+            .map(|line| {
+                let author_display: String = line.author.chars().take(8).collect();
+                format!(
+                    "{} {:8} {} | {:4} | {}",
+                    line.commit_id, author_display, line.date, line.line_number, line.content
+                )
+                .chars()
+                .count()
+            })
+            .max()
+            .unwrap_or(0)
+            + 2; // +2 for scrollbar (1) + margin (1)
 
         // Clamp h_offset
         if self.max_content_width <= self.view_width {
@@ -145,7 +163,13 @@ impl BlameView {
             }
         }
 
-        for (i, line) in blame.lines.iter().skip(self.offset).take(height).enumerate() {
+        for (i, line) in blame
+            .lines
+            .iter()
+            .skip(self.offset)
+            .take(height)
+            .enumerate()
+        {
             let y = inner.y + i as u16;
             let is_selected = self.selected == self.offset + i;
 
@@ -163,12 +187,9 @@ impl BlameView {
 
             // Format: commit_id author date | line_num | content
             let author_display: String = line.author.chars().take(8).collect();
-            let full_line = format!("{} {:8} {} | {:4} | {}",
-                line.commit_id,
-                author_display,
-                line.date,
-                line.line_number,
-                line.content
+            let full_line = format!(
+                "{} {:8} {} | {:4} | {}",
+                line.commit_id, author_display, line.date, line.line_number, line.content
             );
 
             // Apply horizontal scroll

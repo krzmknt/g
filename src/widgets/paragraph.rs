@@ -1,5 +1,5 @@
+use super::{Block, Widget};
 use crate::tui::{Buffer, Rect, Style};
-use super::{Widget, Block};
 
 #[derive(Debug, Clone)]
 pub struct Paragraph<'a> {
@@ -59,7 +59,8 @@ impl Widget for Paragraph<'_> {
         let lines: Vec<&str> = self.text.lines().collect();
         let (scroll_y, scroll_x) = self.scroll;
 
-        for (i, line) in lines.iter()
+        for (i, line) in lines
+            .iter()
             .skip(scroll_y as usize)
             .take(text_area.height as usize)
             .enumerate()

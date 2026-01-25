@@ -1,5 +1,5 @@
-use crate::tui::{Buffer, Rect, Style};
 use super::Widget;
+use crate::tui::{Buffer, Rect, Style};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct Borders(u8);
@@ -92,45 +92,61 @@ impl Widget for Block<'_> {
         // Draw borders
         if self.borders.contains(Borders::TOP) {
             for x in area.x..area.x + area.width {
-                buf.get_mut(x, area.y).set_symbol(HORIZONTAL).set_style(self.border_style);
+                buf.get_mut(x, area.y)
+                    .set_symbol(HORIZONTAL)
+                    .set_style(self.border_style);
             }
         }
 
         if self.borders.contains(Borders::BOTTOM) {
             let y = area.y + area.height - 1;
             for x in area.x..area.x + area.width {
-                buf.get_mut(x, y).set_symbol(HORIZONTAL).set_style(self.border_style);
+                buf.get_mut(x, y)
+                    .set_symbol(HORIZONTAL)
+                    .set_style(self.border_style);
             }
         }
 
         if self.borders.contains(Borders::LEFT) {
             for y in area.y..area.y + area.height {
-                buf.get_mut(area.x, y).set_symbol(VERTICAL).set_style(self.border_style);
+                buf.get_mut(area.x, y)
+                    .set_symbol(VERTICAL)
+                    .set_style(self.border_style);
             }
         }
 
         if self.borders.contains(Borders::RIGHT) {
             let x = area.x + area.width - 1;
             for y in area.y..area.y + area.height {
-                buf.get_mut(x, y).set_symbol(VERTICAL).set_style(self.border_style);
+                buf.get_mut(x, y)
+                    .set_symbol(VERTICAL)
+                    .set_style(self.border_style);
             }
         }
 
         // Corners
         if self.borders.contains(Borders::TOP) && self.borders.contains(Borders::LEFT) {
-            buf.get_mut(area.x, area.y).set_symbol(TOP_LEFT).set_style(self.border_style);
+            buf.get_mut(area.x, area.y)
+                .set_symbol(TOP_LEFT)
+                .set_style(self.border_style);
         }
 
         if self.borders.contains(Borders::TOP) && self.borders.contains(Borders::RIGHT) {
-            buf.get_mut(area.x + area.width - 1, area.y).set_symbol(TOP_RIGHT).set_style(self.border_style);
+            buf.get_mut(area.x + area.width - 1, area.y)
+                .set_symbol(TOP_RIGHT)
+                .set_style(self.border_style);
         }
 
         if self.borders.contains(Borders::BOTTOM) && self.borders.contains(Borders::LEFT) {
-            buf.get_mut(area.x, area.y + area.height - 1).set_symbol(BOTTOM_LEFT).set_style(self.border_style);
+            buf.get_mut(area.x, area.y + area.height - 1)
+                .set_symbol(BOTTOM_LEFT)
+                .set_style(self.border_style);
         }
 
         if self.borders.contains(Borders::BOTTOM) && self.borders.contains(Borders::RIGHT) {
-            buf.get_mut(area.x + area.width - 1, area.y + area.height - 1).set_symbol(BOTTOM_RIGHT).set_style(self.border_style);
+            buf.get_mut(area.x + area.width - 1, area.y + area.height - 1)
+                .set_symbol(BOTTOM_RIGHT)
+                .set_style(self.border_style);
         }
 
         // Title

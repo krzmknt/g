@@ -6,7 +6,7 @@ pub struct CommitInfo {
     pub author: String,
     pub email: String,
     pub time: i64,
-    pub refs: Vec<String>,  // Branch/tag names pointing to this commit
+    pub refs: Vec<String>, // Branch/tag names pointing to this commit
 }
 
 impl CommitInfo {
@@ -17,7 +17,8 @@ impl CommitInfo {
         Self {
             id,
             short_id,
-            message: commit.message()
+            message: commit
+                .message()
                 .unwrap_or("")
                 .lines()
                 .next()

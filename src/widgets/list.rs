@@ -1,5 +1,5 @@
+use super::{Block, StatefulWidget, Widget};
 use crate::tui::{Buffer, Rect, Style};
-use super::{Widget, StatefulWidget, Block};
 
 #[derive(Debug, Clone)]
 pub struct ListItem<'a> {
@@ -116,10 +116,19 @@ impl StatefulWidget for List<'_> {
             }
         }
 
-        let highlight_symbol_width = self.highlight_symbol.map(|s| s.chars().count()).unwrap_or(0);
+        let highlight_symbol_width = self
+            .highlight_symbol
+            .map(|s| s.chars().count())
+            .unwrap_or(0);
 
         // Render items
-        for (i, item) in self.items.iter().skip(state.offset).take(list_area.height as usize).enumerate() {
+        for (i, item) in self
+            .items
+            .iter()
+            .skip(state.offset)
+            .take(list_area.height as usize)
+            .enumerate()
+        {
             let y = list_area.y + i as u16;
             let is_selected = state.selected == Some(state.offset + i);
 
@@ -143,7 +152,9 @@ impl StatefulWidget for List<'_> {
             };
 
             // Draw content
-            let max_width = list_area.width.saturating_sub(highlight_symbol_width as u16);
+            let max_width = list_area
+                .width
+                .saturating_sub(highlight_symbol_width as u16);
             buf.set_string_truncated(content_x, y, item.content, max_width, style);
         }
     }

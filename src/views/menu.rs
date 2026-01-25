@@ -1,5 +1,5 @@
-use crate::tui::{Buffer, Rect, Style};
 use crate::config::Theme;
+use crate::tui::{Buffer, Rect, Style};
 use crate::widgets::{Block, Borders, Widget};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -16,6 +16,10 @@ pub enum PanelType {
     Blame,
     Files,
     Conflicts,
+    PullRequests,
+    Issues,
+    Actions,
+    Releases,
 }
 
 impl PanelType {
@@ -33,6 +37,10 @@ impl PanelType {
             PanelType::Blame,
             PanelType::Files,
             PanelType::Conflicts,
+            PanelType::PullRequests,
+            PanelType::Issues,
+            PanelType::Actions,
+            PanelType::Releases,
         ]
     }
 
@@ -42,7 +50,7 @@ impl PanelType {
             PanelType::Branches => "Branches",
             PanelType::Commits => "Commits",
             PanelType::Stash => "Stash",
-            PanelType::Diff => "Diff",
+            PanelType::Diff => "Preview",
             PanelType::Tags => "Tags",
             PanelType::Remotes => "Remotes",
             PanelType::Worktrees => "Worktrees",
@@ -50,6 +58,10 @@ impl PanelType {
             PanelType::Blame => "Blame",
             PanelType::Files => "Files",
             PanelType::Conflicts => "Conflicts",
+            PanelType::PullRequests => "PRs",
+            PanelType::Issues => "Issues",
+            PanelType::Actions => "Actions",
+            PanelType::Releases => "Releases",
         }
     }
 
@@ -67,6 +79,10 @@ impl PanelType {
             PanelType::Blame => "b",
             PanelType::Files => "f",
             PanelType::Conflicts => "x",
+            PanelType::PullRequests => "p",
+            PanelType::Issues => "i",
+            PanelType::Actions => "a",
+            PanelType::Releases => "e",
         }
     }
 }
@@ -124,7 +140,13 @@ impl MenuView {
         }
     }
 
-    pub fn render(&self, area: Rect, buf: &mut Buffer, theme: &Theme, current_panel: Option<PanelType>) {
+    pub fn render(
+        &self,
+        area: Rect,
+        buf: &mut Buffer,
+        theme: &Theme,
+        current_panel: Option<PanelType>,
+    ) {
         if !self.visible {
             return;
         }

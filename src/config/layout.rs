@@ -4,7 +4,7 @@ use std::collections::HashMap;
 /// A column in the layout
 #[derive(Debug, Clone)]
 pub struct Column {
-    pub width: f32,  // Width as percentage (0.0 - 1.0)
+    pub width: f32, // Width as percentage (0.0 - 1.0)
     pub panels: Vec<PanelHeight>,
 }
 
@@ -12,7 +12,7 @@ pub struct Column {
 #[derive(Debug, Clone)]
 pub struct PanelHeight {
     pub panel: PanelType,
-    pub height: f32,  // Height as percentage within column (0.0 - 1.0)
+    pub height: f32, // Height as percentage within column (0.0 - 1.0)
 }
 
 #[derive(Debug, Clone)]
@@ -24,35 +24,82 @@ impl Default for LayoutConfig {
     fn default() -> Self {
         // Default layout: 3 columns
         // Left (20%): Files, Status, Branches, Stash, Tags, Worktrees, Submodules, Remotes
-        // Middle (30%): Commits, Conflicts
+        // Middle (30%): Commits, PullRequests, Issues, Actions, Releases, Conflicts
         // Right (50%): Diff
         Self {
             columns: vec![
                 Column {
                     width: 0.20,
                     panels: vec![
-                        PanelHeight { panel: PanelType::Files, height: 0.20 },
-                        PanelHeight { panel: PanelType::Status, height: 0.15 },
-                        PanelHeight { panel: PanelType::Branches, height: 0.15 },
-                        PanelHeight { panel: PanelType::Stash, height: 0.10 },
-                        PanelHeight { panel: PanelType::Tags, height: 0.10 },
-                        PanelHeight { panel: PanelType::Worktrees, height: 0.10 },
-                        PanelHeight { panel: PanelType::Submodules, height: 0.10 },
-                        PanelHeight { panel: PanelType::Remotes, height: 0.10 },
+                        PanelHeight {
+                            panel: PanelType::Files,
+                            height: 0.20,
+                        },
+                        PanelHeight {
+                            panel: PanelType::Status,
+                            height: 0.15,
+                        },
+                        PanelHeight {
+                            panel: PanelType::Branches,
+                            height: 0.15,
+                        },
+                        PanelHeight {
+                            panel: PanelType::Stash,
+                            height: 0.10,
+                        },
+                        PanelHeight {
+                            panel: PanelType::Tags,
+                            height: 0.10,
+                        },
+                        PanelHeight {
+                            panel: PanelType::Worktrees,
+                            height: 0.10,
+                        },
+                        PanelHeight {
+                            panel: PanelType::Submodules,
+                            height: 0.10,
+                        },
+                        PanelHeight {
+                            panel: PanelType::Remotes,
+                            height: 0.10,
+                        },
                     ],
                 },
                 Column {
                     width: 0.30,
                     panels: vec![
-                        PanelHeight { panel: PanelType::Commits, height: 0.85 },
-                        PanelHeight { panel: PanelType::Conflicts, height: 0.15 },
+                        PanelHeight {
+                            panel: PanelType::Commits,
+                            height: 0.30,
+                        },
+                        PanelHeight {
+                            panel: PanelType::PullRequests,
+                            height: 0.15,
+                        },
+                        PanelHeight {
+                            panel: PanelType::Issues,
+                            height: 0.15,
+                        },
+                        PanelHeight {
+                            panel: PanelType::Actions,
+                            height: 0.15,
+                        },
+                        PanelHeight {
+                            panel: PanelType::Releases,
+                            height: 0.15,
+                        },
+                        PanelHeight {
+                            panel: PanelType::Conflicts,
+                            height: 0.10,
+                        },
                     ],
                 },
                 Column {
                     width: 0.50,
-                    panels: vec![
-                        PanelHeight { panel: PanelType::Diff, height: 1.0 },
-                    ],
+                    panels: vec![PanelHeight {
+                        panel: PanelType::Diff,
+                        height: 1.0,
+                    }],
                 },
             ],
         }
@@ -70,7 +117,8 @@ impl LayoutConfig {
 
             for col_val in columns_arr {
                 if let Value::Table(col_table) = col_val {
-                    let width = col_table.get("width")
+                    let width = col_table
+                        .get("width")
                         .and_then(|v| match v {
                             Value::Float(f) => Some(*f as f32),
                             Value::Integer(i) => Some(*i as f32),
@@ -83,11 +131,19 @@ impl LayoutConfig {
                     if let Some(Value::Array(panels_arr)) = col_table.get("panels") {
                         for panel_val in panels_arr {
                             if let Value::Table(panel_table) = panel_val {
-                                let panel_type = panel_table.get("type")
-                                    .and_then(|v| if let Value::String(s) = v { Some(s.as_str()) } else { None })
+                                let panel_type = panel_table
+                                    .get("type")
+                                    .and_then(|v| {
+                                        if let Value::String(s) = v {
+                                            Some(s.as_str())
+                                        } else {
+                                            None
+                                        }
+                                    })
                                     .and_then(Self::parse_panel_type);
 
-                                let height = panel_table.get("height")
+                                let height = panel_table
+                                    .get("height")
                                     .and_then(|v| match v {
                                         Value::Float(f) => Some(*f as f32),
                                         Value::Integer(i) => Some(*i as f32),
@@ -130,12 +186,17 @@ impl LayoutConfig {
             "blame" => Some(PanelType::Blame),
             "files" => Some(PanelType::Files),
             "conflicts" => Some(PanelType::Conflicts),
+            "pullrequests" | "prs" => Some(PanelType::PullRequests),
+            "issues" => Some(PanelType::Issues),
+            "actions" => Some(PanelType::Actions),
+            "releases" => Some(PanelType::Releases),
             _ => None,
         }
     }
 
     pub fn all_panels(&self) -> Vec<PanelType> {
-        self.columns.iter()
+        self.columns
+            .iter()
             .flat_map(|col| col.panels.iter().map(|p| p.panel))
             .collect()
     }

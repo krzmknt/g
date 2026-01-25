@@ -1,9 +1,9 @@
-mod terminal;
 mod buffer;
-mod style;
 mod render;
+mod style;
+mod terminal;
 
-pub use terminal::Terminal;
-pub use buffer::{Buffer, Cell};
-pub use style::{Style, Color, Modifier};
+pub use buffer::{str_display_width, unicode_width, Buffer, Cell};
 pub use render::Rect;
+pub use style::{Color, Modifier, Style};
+pub use terminal::Terminal;

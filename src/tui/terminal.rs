@@ -1,8 +1,8 @@
-use std::io::{self, Write, Stdout, BufWriter};
-use crate::error::{Error, Result};
 use super::buffer::{Buffer, Cell};
 use super::render::Rect;
 use super::style::Style;
+use crate::error::{Error, Result};
+use std::io::{self, BufWriter, Stdout, Write};
 
 pub struct Terminal {
     stdout: BufWriter<Stdout>,
@@ -104,7 +104,9 @@ impl Terminal {
         unsafe {
             let mut termios: libc::termios = std::mem::zeroed();
             if libc::tcgetattr(libc::STDIN_FILENO, &mut termios) != 0 {
-                return Err(Error::Terminal("Failed to get terminal attributes".to_string()));
+                return Err(Error::Terminal(
+                    "Failed to get terminal attributes".to_string(),
+                ));
             }
 
             self.original_termios = Some(termios);
@@ -122,7 +124,9 @@ impl Terminal {
             termios.c_cc[libc::VTIME] = 1; // 100ms timeout
 
             if libc::tcsetattr(libc::STDIN_FILENO, libc::TCSAFLUSH, &termios) != 0 {
-                return Err(Error::Terminal("Failed to set terminal attributes".to_string()));
+                return Err(Error::Terminal(
+                    "Failed to set terminal attributes".to_string(),
+                ));
             }
         }
         Ok(())
@@ -333,7 +337,13 @@ impl Terminal {
             write!(self.stdout, "{}", cell.symbol)?;
 
             // Update position tracking - wide chars advance by their width
-            let char_width = if cell.symbol.chars().next().map(|c| !c.is_ascii()).unwrap_or(false) {
+            let char_width = if cell
+                .symbol
+                .chars()
+                .next()
+                .map(|c| !c.is_ascii())
+                .unwrap_or(false)
+            {
                 2u16
             } else {
                 1u16

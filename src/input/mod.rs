@@ -1,5 +1,5 @@
 mod event;
 mod reader;
 
-pub use event::{Event, KeyEvent, KeyCode, Modifiers, MouseEvent, MouseEventKind, MouseButton};
+pub use event::{Event, KeyCode, KeyEvent, Modifiers, MouseButton, MouseEvent, MouseEventKind};
 pub use reader::EventReader;

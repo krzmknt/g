@@ -13,7 +13,8 @@ impl DiffInfo {
     }
 
     pub fn additions(&self) -> usize {
-        self.files.iter()
+        self.files
+            .iter()
             .flat_map(|f| &f.hunks)
             .flat_map(|h| &h.lines)
             .filter(|l| matches!(l.line_type, LineType::Addition))
@@ -21,7 +22,8 @@ impl DiffInfo {
     }
 
     pub fn deletions(&self) -> usize {
-        self.files.iter()
+        self.files
+            .iter()
             .flat_map(|f| &f.hunks)
             .flat_map(|h| &h.lines)
             .filter(|l| matches!(l.line_type, LineType::Deletion))
@@ -37,14 +39,16 @@ pub struct FileDiff {
 
 impl FileDiff {
     pub fn additions(&self) -> usize {
-        self.hunks.iter()
+        self.hunks
+            .iter()
             .flat_map(|h| &h.lines)
             .filter(|l| matches!(l.line_type, LineType::Addition))
             .count()
     }
 
     pub fn deletions(&self) -> usize {
-        self.hunks.iter()
+        self.hunks
+            .iter()
             .flat_map(|h| &h.lines)
             .filter(|l| matches!(l.line_type, LineType::Deletion))
             .count()

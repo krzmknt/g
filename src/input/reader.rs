@@ -1,7 +1,7 @@
+use super::event::{Event, KeyCode, KeyEvent, Modifiers, MouseButton, MouseEvent, MouseEventKind};
+use crate::error::Result;
 use std::io::Read;
 use std::time::Duration;
-use super::event::{Event, KeyEvent, KeyCode, Modifiers, MouseEvent, MouseEventKind, MouseButton};
-use crate::error::Result;
 
 pub struct EventReader {
     buffer: [u8; 32],
@@ -81,17 +81,15 @@ impl EventReader {
 
     #[cfg(windows)]
     fn poll_stdin(&self, timeout: Duration) -> Result<bool> {
-        use windows_sys::Win32::System::Console::*;
         use windows_sys::Win32::Foundation::WAIT_OBJECT_0;
+        use windows_sys::Win32::System::Console::*;
 
         unsafe {
             let handle = GetStdHandle(STD_INPUT_HANDLE);
             let timeout_ms = timeout.as_millis() as u32;
 
-            let result = windows_sys::Win32::System::Threading::WaitForSingleObject(
-                handle as _,
-                timeout_ms,
-            );
+            let result =
+                windows_sys::Win32::System::Threading::WaitForSingleObject(handle as _, timeout_ms);
 
             Ok(result == WAIT_OBJECT_0)
         }
@@ -108,7 +106,10 @@ impl EventReader {
         if bytes[0] == 0x1b {
             if self.buffer_len == 1 {
                 // Just escape
-                return (Event::Key(KeyEvent::new(KeyCode::Escape, Modifiers::NONE)), 1);
+                return (
+                    Event::Key(KeyEvent::new(KeyCode::Escape, Modifiers::NONE)),
+                    1,
+                );
             }
 
             if bytes.len() >= 2 && bytes[1] == b'[' {
@@ -128,7 +129,10 @@ impl EventReader {
                 }
             }
 
-            return (Event::Key(KeyEvent::new(KeyCode::Escape, Modifiers::NONE)), 1);
+            return (
+                Event::Key(KeyEvent::new(KeyCode::Escape, Modifiers::NONE)),
+                1,
+            );
         }
 
         self.parse_single_byte(bytes[0])
@@ -152,7 +156,10 @@ impl EventReader {
             _ => {
                 // Try to parse as UTF-8
                 if let Some((c, len)) = self.parse_utf8() {
-                    return (Event::Key(KeyEvent::new(KeyCode::Char(c), Modifiers::NONE)), len);
+                    return (
+                        Event::Key(KeyEvent::new(KeyCode::Char(c), Modifiers::NONE)),
+                        len,
+                    );
                 }
                 return (Event::None, 1);
             }
@@ -173,7 +180,10 @@ impl EventReader {
         // Base offset is 2 (ESC [)
 
         if bytes.is_empty() {
-            return (Event::Key(KeyEvent::new(KeyCode::Escape, Modifiers::NONE)), 1);
+            return (
+                Event::Key(KeyEvent::new(KeyCode::Escape, Modifiers::NONE)),
+                1,
+            );
         }
 
         // Check for SGR mouse encoding: ESC [ < Cb ; Cx ; Cy M/m
@@ -190,11 +200,21 @@ impl EventReader {
         match bytes[0] {
             b'A' => return (Event::Key(KeyEvent::new(KeyCode::Up, Modifiers::NONE)), 3),
             b'B' => return (Event::Key(KeyEvent::new(KeyCode::Down, Modifiers::NONE)), 3),
-            b'C' => return (Event::Key(KeyEvent::new(KeyCode::Right, Modifiers::NONE)), 3),
+            b'C' => {
+                return (
+                    Event::Key(KeyEvent::new(KeyCode::Right, Modifiers::NONE)),
+                    3,
+                )
+            }
             b'D' => return (Event::Key(KeyEvent::new(KeyCode::Left, Modifiers::NONE)), 3),
             b'H' => return (Event::Key(KeyEvent::new(KeyCode::Home, Modifiers::NONE)), 3),
             b'F' => return (Event::Key(KeyEvent::new(KeyCode::End, Modifiers::NONE)), 3),
-            b'Z' => return (Event::Key(KeyEvent::new(KeyCode::BackTab, Modifiers::SHIFT)), 3),
+            b'Z' => {
+                return (
+                    Event::Key(KeyEvent::new(KeyCode::BackTab, Modifiers::SHIFT)),
+                    3,
+                )
+            }
             _ => {}
         }
 
@@ -382,7 +402,10 @@ impl EventReader {
     fn parse_ss3_sequence(&self, bytes: &[u8]) -> (Event, usize) {
         // SS3 sequences: ESC O ...
         if bytes.is_empty() {
-            return (Event::Key(KeyEvent::new(KeyCode::Escape, Modifiers::NONE)), 1);
+            return (
+                Event::Key(KeyEvent::new(KeyCode::Escape, Modifiers::NONE)),
+                1,
+            );
         }
 
         let event = match bytes[0] {

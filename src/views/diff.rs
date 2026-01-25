@@ -1,12 +1,321 @@
-use crate::git::{DiffInfo, FileDiff, LineType};
-use crate::tui::{Buffer, Rect, Style};
 use crate::config::Theme;
+use crate::git::{DiffInfo, FileDiff, LineType, PullRequestInfo};
+use crate::tui::{str_display_width, unicode_width, Buffer, Color, Rect, Style};
 use crate::widgets::{Block, Borders, Scrollbar, Widget};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DiffMode {
     Inline,
     SideBySide,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PreviewType {
+    Diff,
+    FileContent,
+    PullRequest,
+}
+
+#[derive(Debug, Clone)]
+pub struct FileContent {
+    pub path: String,
+    pub lines: Vec<String>,
+}
+
+#[derive(Debug, Clone)]
+pub struct PullRequestPreview {
+    pub number: u32,
+    pub title: String,
+    pub author: String,
+    pub state: String,
+    pub is_draft: bool,
+    pub base_branch: String,
+    pub head_branch: String,
+    pub additions: u32,
+    pub deletions: u32,
+    pub body: String,
+    pub url: String,
+    pub created_at: String,
+}
+
+impl From<&PullRequestInfo> for PullRequestPreview {
+    fn from(pr: &PullRequestInfo) -> Self {
+        Self {
+            number: pr.number,
+            title: pr.title.clone(),
+            author: pr.author.login.clone(),
+            state: pr.state.clone(),
+            is_draft: pr.is_draft,
+            base_branch: pr.base_ref_name.clone(),
+            head_branch: pr.head_ref_name.clone(),
+            additions: pr.additions,
+            deletions: pr.deletions,
+            body: pr.body.clone(),
+            url: pr.url.clone(),
+            created_at: pr.created_at.clone(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SyntaxType {
+    None,
+    Rust,
+    JavaScript,
+    TypeScript,
+    Python,
+    Go,
+    C,
+    Cpp,
+    Shell,
+    Toml,
+    Json,
+}
+
+impl SyntaxType {
+    fn from_path(path: &str) -> Self {
+        let filename = path.rsplit('/').next().unwrap_or(path).to_lowercase();
+        match filename.as_str() {
+            "makefile" | "dockerfile" => return SyntaxType::Shell,
+            "cargo.toml" => return SyntaxType::Toml,
+            _ => {}
+        }
+        let ext = path.rsplit('.').next().unwrap_or("").to_lowercase();
+        match ext.as_str() {
+            "rs" => SyntaxType::Rust,
+            "js" | "mjs" | "jsx" => SyntaxType::JavaScript,
+            "ts" | "tsx" => SyntaxType::TypeScript,
+            "py" => SyntaxType::Python,
+            "go" => SyntaxType::Go,
+            "c" | "h" => SyntaxType::C,
+            "cpp" | "cc" | "hpp" => SyntaxType::Cpp,
+            "sh" | "bash" | "zsh" => SyntaxType::Shell,
+            "toml" => SyntaxType::Toml,
+            "json" => SyntaxType::Json,
+            _ => SyntaxType::None,
+        }
+    }
+
+    fn keywords(&self) -> &[&str] {
+        match self {
+            SyntaxType::Rust => &[
+                "fn", "let", "mut", "const", "if", "else", "match", "for", "while", "loop",
+                "break", "continue", "return", "pub", "mod", "use", "struct", "enum", "impl",
+                "trait", "type", "async", "await", "move", "self", "Self", "super", "crate", "as",
+                "in", "dyn", "unsafe", "where",
+            ],
+            SyntaxType::JavaScript | SyntaxType::TypeScript => &[
+                "function",
+                "const",
+                "let",
+                "var",
+                "if",
+                "else",
+                "for",
+                "while",
+                "return",
+                "class",
+                "extends",
+                "new",
+                "this",
+                "import",
+                "export",
+                "default",
+                "from",
+                "async",
+                "await",
+                "try",
+                "catch",
+                "throw",
+                "true",
+                "false",
+                "null",
+                "undefined",
+            ],
+            SyntaxType::Python => &[
+                "def", "class", "if", "elif", "else", "for", "while", "try", "except", "finally",
+                "with", "as", "import", "from", "return", "yield", "raise", "pass", "break",
+                "continue", "and", "or", "not", "in", "is", "lambda", "True", "False", "None",
+            ],
+            SyntaxType::Go => &[
+                "func",
+                "var",
+                "const",
+                "type",
+                "struct",
+                "interface",
+                "map",
+                "chan",
+                "if",
+                "else",
+                "for",
+                "range",
+                "switch",
+                "case",
+                "default",
+                "break",
+                "continue",
+                "return",
+                "go",
+                "defer",
+                "select",
+                "package",
+                "import",
+                "true",
+                "false",
+                "nil",
+            ],
+            SyntaxType::C | SyntaxType::Cpp => &[
+                "if",
+                "else",
+                "for",
+                "while",
+                "do",
+                "switch",
+                "case",
+                "default",
+                "break",
+                "continue",
+                "return",
+                "struct",
+                "enum",
+                "typedef",
+                "const",
+                "static",
+                "void",
+                "int",
+                "char",
+                "float",
+                "double",
+                "class",
+                "public",
+                "private",
+                "protected",
+                "virtual",
+                "new",
+                "delete",
+                "true",
+                "false",
+                "nullptr",
+            ],
+            SyntaxType::Shell => &[
+                "if", "then", "else", "elif", "fi", "case", "esac", "for", "while", "do", "done",
+                "in", "function", "return", "exit", "local", "export", "true", "false",
+            ],
+            _ => &[],
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+enum TokenType {
+    Normal,
+    Keyword,
+    String,
+    Comment,
+    Number,
+}
+
+struct SyntaxHighlighter {
+    syntax_type: SyntaxType,
+}
+
+impl SyntaxHighlighter {
+    fn new(path: &str) -> Self {
+        Self {
+            syntax_type: SyntaxType::from_path(path),
+        }
+    }
+
+    fn highlight_line(&self, line: &str) -> Vec<(String, Color)> {
+        if self.syntax_type == SyntaxType::None {
+            return vec![(line.to_string(), Color::Rgb(205, 214, 244))];
+        }
+        let mut tokens = Vec::new();
+        let chars: Vec<char> = line.chars().collect();
+        let mut i = 0;
+        let keywords = self.syntax_type.keywords();
+
+        while i < chars.len() {
+            // Comments
+            if i + 1 < chars.len() && chars[i] == '/' && chars[i + 1] == '/' {
+                tokens.push((chars[i..].iter().collect(), Color::Rgb(108, 112, 134)));
+                break;
+            }
+            if chars[i] == '#'
+                && matches!(
+                    self.syntax_type,
+                    SyntaxType::Python | SyntaxType::Shell | SyntaxType::Toml
+                )
+            {
+                tokens.push((chars[i..].iter().collect(), Color::Rgb(108, 112, 134)));
+                break;
+            }
+            // Strings
+            if chars[i] == '"' || chars[i] == '\'' {
+                let q = chars[i];
+                let mut j = i + 1;
+                while j < chars.len() && chars[j] != q {
+                    if chars[j] == '\\' {
+                        j += 1;
+                    }
+                    j += 1;
+                }
+                if j < chars.len() {
+                    j += 1;
+                }
+                tokens.push((chars[i..j].iter().collect(), Color::Rgb(166, 227, 161)));
+                i = j;
+                continue;
+            }
+            // Numbers
+            if chars[i].is_ascii_digit() {
+                let mut j = i;
+                while j < chars.len()
+                    && (chars[j].is_ascii_digit()
+                        || chars[j] == '.'
+                        || chars[j] == 'x'
+                        || chars[j].is_ascii_hexdigit())
+                {
+                    j += 1;
+                }
+                tokens.push((chars[i..j].iter().collect(), Color::Rgb(250, 179, 135)));
+                i = j;
+                continue;
+            }
+            // Identifiers/keywords
+            if chars[i].is_alphabetic() || chars[i] == '_' {
+                let mut j = i;
+                while j < chars.len() && (chars[j].is_alphanumeric() || chars[j] == '_') {
+                    j += 1;
+                }
+                let word: String = chars[i..j].iter().collect();
+                let color = if keywords.contains(&word.as_str()) {
+                    Color::Rgb(203, 166, 247) // keyword purple
+                } else if j < chars.len() && chars[j] == '(' {
+                    Color::Rgb(137, 180, 250) // function blue
+                } else if word
+                    .chars()
+                    .next()
+                    .map(|c| c.is_uppercase())
+                    .unwrap_or(false)
+                {
+                    Color::Rgb(249, 226, 175) // type yellow
+                } else {
+                    Color::Rgb(205, 214, 244) // normal
+                };
+                tokens.push((word, color));
+                i = j;
+                continue;
+            }
+            tokens.push((chars[i].to_string(), Color::Rgb(205, 214, 244)));
+            i += 1;
+        }
+        if tokens.is_empty() {
+            tokens.push((line.to_string(), Color::Rgb(205, 214, 244)));
+        }
+        tokens
+    }
 }
 
 pub struct DiffView {
@@ -18,6 +327,17 @@ pub struct DiffView {
     pub mode: DiffMode,
     pub max_content_width: usize,
     pub view_width: usize,
+    pub preview_type: PreviewType,
+    pub file_content: Option<FileContent>,
+    pub pr_preview: Option<PullRequestPreview>,
+    // Visual mode (line selection)
+    pub visual_mode: bool,
+    pub visual_start: usize, // Starting line of selection
+    pub cursor_line: usize,  // Current cursor line
+    // Search
+    pub search_query: Option<String>,
+    pub search_matches: Vec<(usize, usize, usize)>, // (line_idx, start_col, end_col)
+    pub current_match: usize,
 }
 
 impl DiffView {
@@ -31,7 +351,33 @@ impl DiffView {
             mode: DiffMode::Inline,
             max_content_width: 0,
             view_width: 0,
+            preview_type: PreviewType::Diff,
+            file_content: None,
+            pr_preview: None,
+            visual_mode: false,
+            visual_start: 0,
+            cursor_line: 0,
+            search_query: None,
+            search_matches: Vec::new(),
+            current_match: 0,
         }
+    }
+
+    pub fn set_pr_preview(&mut self, pr: &PullRequestInfo) {
+        self.pr_preview = Some(PullRequestPreview::from(pr));
+        self.preview_type = PreviewType::PullRequest;
+        self.scroll = 0;
+    }
+
+    pub fn clear_pr_preview(&mut self) {
+        self.pr_preview = None;
+        if self.preview_type == PreviewType::PullRequest {
+            self.preview_type = PreviewType::Diff;
+        }
+    }
+
+    pub fn set_mode(&mut self, mode: DiffMode) {
+        self.mode = mode;
     }
 
     pub fn can_scroll_left(&self) -> bool {
@@ -42,8 +388,8 @@ impl DiffView {
         if self.view_width == 0 {
             return self.max_content_width > 0;
         }
-        self.max_content_width > self.view_width &&
-            self.h_offset < self.max_content_width.saturating_sub(self.view_width)
+        self.max_content_width > self.view_width
+            && self.h_offset < self.max_content_width.saturating_sub(self.view_width)
     }
 
     pub fn scroll_left(&mut self) {
@@ -58,12 +404,32 @@ impl DiffView {
         self.diff = diff;
         self.current_file = 0;
         self.scroll = 0;
+        self.h_offset = 0;
+        self.cursor_line = 0;
+        self.visual_mode = false;
+        self.preview_type = PreviewType::Diff;
+        self.file_content = None;
+    }
+
+    pub fn set_file_content(&mut self, path: String, content: String) {
+        let lines: Vec<String> = content.lines().map(|s| s.to_string()).collect();
+        self.file_content = Some(FileContent { path, lines });
+        self.preview_type = PreviewType::FileContent;
+        self.scroll = 0;
+        self.h_offset = 0;
+        self.cursor_line = 0;
+        self.visual_mode = false;
     }
 
     pub fn clear(&mut self) {
         self.diff = DiffInfo { files: Vec::new() };
         self.current_file = 0;
         self.scroll = 0;
+        self.h_offset = 0;
+        self.cursor_line = 0;
+        self.visual_mode = false;
+        self.file_content = None;
+        self.preview_type = PreviewType::Diff;
     }
 
     pub fn current_file(&self) -> Option<&FileDiff> {
@@ -78,13 +444,63 @@ impl DiffView {
         self.scroll += 1;
     }
 
+    /// Move cursor up (for normal mode navigation)
+    pub fn cursor_up(&mut self) {
+        if self.cursor_line > 0 {
+            self.cursor_line -= 1;
+            // Scroll to keep cursor visible
+            if self.cursor_line < self.scroll {
+                self.scroll = self.cursor_line;
+            }
+        }
+    }
+
+    /// Move cursor down (for normal mode navigation)
+    pub fn cursor_down(&mut self, visible_height: usize) {
+        let max_lines = self.get_total_lines();
+        if self.cursor_line < max_lines.saturating_sub(1) {
+            self.cursor_line += 1;
+            // Scroll to keep cursor visible
+            if self.cursor_line >= self.scroll + visible_height {
+                self.scroll = self.cursor_line - visible_height + 1;
+            }
+        }
+    }
+
+    /// Move cursor to top
+    pub fn cursor_to_top(&mut self) {
+        self.cursor_line = 0;
+        self.scroll = 0;
+    }
+
+    /// Move cursor to bottom
+    pub fn cursor_to_bottom(&mut self, visible_height: usize) {
+        let max_lines = self.get_total_lines();
+        if max_lines > 0 {
+            self.cursor_line = max_lines - 1;
+            if self.cursor_line >= visible_height {
+                self.scroll = self.cursor_line - visible_height + 1;
+            }
+        }
+    }
+
     pub fn scroll_to_top(&mut self) {
         self.scroll = 0;
+        self.cursor_line = 0;
     }
 
     pub fn scroll_to_bottom(&mut self) {
         // Set to a large number, rendering will clamp it
+        let max_lines = self.get_total_lines();
+        if max_lines > 0 {
+            self.cursor_line = max_lines - 1;
+        }
         self.scroll = usize::MAX / 2;
+    }
+
+    pub fn select_at_row(&mut self, row: usize) {
+        // For diff view, clicking sets the cursor position
+        self.cursor_line = self.scroll + row;
     }
 
     pub fn next_file(&mut self) {
@@ -117,23 +533,283 @@ impl DiffView {
         // TODO: Implement hunk navigation
     }
 
-    pub fn render(&mut self, area: Rect, buf: &mut Buffer, theme: &Theme, focused: bool) {
-        let border_color = if focused { theme.border_focused } else { theme.border_unfocused };
+    /// Enter visual (line selection) mode
+    pub fn enter_visual_mode(&mut self) {
+        self.visual_mode = true;
+        self.visual_start = self.cursor_line;
+    }
 
-        let mode_indicator = match self.mode {
-            DiffMode::Inline => "inline",
-            DiffMode::SideBySide => "split",
+    /// Exit visual mode
+    pub fn exit_visual_mode(&mut self) {
+        self.visual_mode = false;
+    }
+
+    /// Check if in visual mode
+    pub fn is_visual_mode(&self) -> bool {
+        self.visual_mode
+    }
+
+    /// Move cursor up in visual mode
+    pub fn visual_move_up(&mut self) {
+        if self.cursor_line > 0 {
+            self.cursor_line -= 1;
+            // Adjust scroll to keep cursor visible
+            if self.cursor_line < self.scroll {
+                self.scroll = self.cursor_line;
+            }
+        }
+    }
+
+    /// Move cursor down in visual mode
+    pub fn visual_move_down(&mut self, max_lines: usize) {
+        if self.cursor_line < max_lines.saturating_sub(1) {
+            self.cursor_line += 1;
+        }
+    }
+
+    /// Get the selected line range (start, end) inclusive
+    pub fn get_selection_range(&self) -> (usize, usize) {
+        if self.visual_start <= self.cursor_line {
+            (self.visual_start, self.cursor_line)
+        } else {
+            (self.cursor_line, self.visual_start)
+        }
+    }
+
+    /// Get the selected lines as a string (for clipboard)
+    pub fn get_selected_text(&self) -> Option<String> {
+        if !self.visual_mode {
+            return None;
+        }
+
+        let (start, end) = self.get_selection_range();
+
+        match self.preview_type {
+            PreviewType::FileContent => {
+                if let Some(ref fc) = self.file_content {
+                    let selected: Vec<&str> = fc
+                        .lines
+                        .iter()
+                        .skip(start)
+                        .take(end - start + 1)
+                        .map(|s| s.as_str())
+                        .collect();
+                    Some(selected.join("\n"))
+                } else {
+                    None
+                }
+            }
+            PreviewType::Diff => {
+                // For diff, collect lines from hunks
+                if let Some(file) = self.diff.files.get(self.current_file) {
+                    let mut all_lines: Vec<String> = Vec::new();
+                    for hunk in &file.hunks {
+                        all_lines.push(hunk.header.clone());
+                        for line in &hunk.lines {
+                            all_lines.push(line.content.clone());
+                        }
+                    }
+                    let selected: Vec<&str> = all_lines
+                        .iter()
+                        .skip(start)
+                        .take(end - start + 1)
+                        .map(|s| s.as_str())
+                        .collect();
+                    Some(selected.join(""))
+                } else {
+                    None
+                }
+            }
+            PreviewType::PullRequest => {
+                // PR preview doesn't support text selection
+                None
+            }
+        }
+    }
+
+    /// Get total line count for the current content
+    pub fn get_total_lines(&self) -> usize {
+        match self.preview_type {
+            PreviewType::FileContent => self
+                .file_content
+                .as_ref()
+                .map(|fc| fc.lines.len())
+                .unwrap_or(0),
+            PreviewType::Diff => {
+                if let Some(file) = self.diff.files.get(self.current_file) {
+                    let mut count = 0;
+                    for hunk in &file.hunks {
+                        count += 1; // header
+                        count += hunk.lines.len();
+                    }
+                    count
+                } else {
+                    0
+                }
+            }
+            PreviewType::PullRequest => {
+                // PR preview line count not tracked for visual mode
+                0
+            }
+        }
+    }
+
+    /// Adjust scroll to keep cursor visible (called after cursor movement)
+    pub fn ensure_cursor_visible(&mut self, visible_height: usize) {
+        if self.cursor_line < self.scroll {
+            self.scroll = self.cursor_line;
+        } else if self.cursor_line >= self.scroll + visible_height {
+            self.scroll = self.cursor_line - visible_height + 1;
+        }
+    }
+
+    pub fn search(&mut self, query: &str) {
+        self.search_query = Some(query.to_string());
+        self.search_matches.clear();
+        self.current_match = 0;
+
+        let query_lower = query.to_lowercase();
+
+        // Get lines based on current preview type
+        let lines: Vec<String> = match self.preview_type {
+            PreviewType::FileContent => self
+                .file_content
+                .as_ref()
+                .map(|fc| fc.lines.clone())
+                .unwrap_or_default(),
+            PreviewType::Diff => {
+                let mut lines = Vec::new();
+                if let Some(file) = self.diff.files.get(self.current_file) {
+                    for hunk in &file.hunks {
+                        lines.push(hunk.header.clone());
+                        for line in &hunk.lines {
+                            lines.push(line.content.clone());
+                        }
+                    }
+                }
+                lines
+            }
+            PreviewType::PullRequest => {
+                // PR preview: search in body
+                if let Some(ref pr) = self.pr_preview {
+                    pr.body.lines().map(|s| s.to_string()).collect()
+                } else {
+                    Vec::new()
+                }
+            }
         };
 
-        let title = if let Some(file) = self.current_file() {
-            format!(" Diff: {} (+{} -{}) [{}] ",
-                file.path,
-                file.additions(),
-                file.deletions(),
-                mode_indicator
-            )
+        // Find all matches
+        for (line_idx, line) in lines.iter().enumerate() {
+            let line_lower = line.to_lowercase();
+            let mut start = 0;
+            while let Some(pos) = line_lower[start..].find(&query_lower) {
+                let match_start = start + pos;
+                let match_end = match_start + query.len();
+                self.search_matches.push((line_idx, match_start, match_end));
+                start = match_end;
+            }
+        }
+
+        // Jump to first result
+        if !self.search_matches.is_empty() {
+            let (line_idx, _, _) = self.search_matches[0];
+            self.scroll = line_idx.saturating_sub(5); // Show some context above
+        }
+    }
+
+    pub fn clear_search(&mut self) {
+        self.search_query = None;
+        self.search_matches.clear();
+        self.current_match = 0;
+    }
+
+    pub fn next_search_result(&mut self) {
+        if self.search_matches.is_empty() {
+            return;
+        }
+
+        self.current_match = (self.current_match + 1) % self.search_matches.len();
+        let (line_idx, _, _) = self.search_matches[self.current_match];
+        self.scroll = line_idx.saturating_sub(5);
+    }
+
+    pub fn prev_search_result(&mut self) {
+        if self.search_matches.is_empty() {
+            return;
+        }
+
+        if self.current_match == 0 {
+            self.current_match = self.search_matches.len() - 1;
         } else {
-            format!(" Diff [{}] ", mode_indicator)
+            self.current_match -= 1;
+        }
+        let (line_idx, _, _) = self.search_matches[self.current_match];
+        self.scroll = line_idx.saturating_sub(5);
+    }
+
+    /// Check if a line has search matches and return them
+    fn get_line_search_matches(&self, line_idx: usize) -> Vec<(usize, usize)> {
+        self.search_matches
+            .iter()
+            .filter(|(idx, _, _)| *idx == line_idx)
+            .map(|(_, start, end)| (*start, *end))
+            .collect()
+    }
+
+    /// Check if this match is the current/highlighted one
+    fn is_current_match(&self, line_idx: usize, start: usize) -> bool {
+        if self.search_matches.is_empty() {
+            return false;
+        }
+        let (cur_line, cur_start, _) = self.search_matches[self.current_match];
+        cur_line == line_idx && cur_start == start
+    }
+
+    pub fn render(&mut self, area: Rect, buf: &mut Buffer, theme: &Theme, focused: bool) {
+        let border_color = if focused {
+            theme.border_focused
+        } else {
+            theme.border_unfocused
+        };
+
+        let visual_indicator = if self.visual_mode { " [VISUAL] " } else { "" };
+
+        let title = match self.preview_type {
+            PreviewType::Diff => {
+                let mode_indicator = match self.mode {
+                    DiffMode::Inline => "inline",
+                    DiffMode::SideBySide => "split",
+                };
+
+                if let Some(file) = self.current_file() {
+                    format!(
+                        " Preview: {} (+{} -{}) [{}]{} ",
+                        file.path,
+                        file.additions(),
+                        file.deletions(),
+                        mode_indicator,
+                        visual_indicator
+                    )
+                } else {
+                    format!(" Preview [{}]{} ", mode_indicator, visual_indicator)
+                }
+            }
+            PreviewType::FileContent => {
+                if let Some(ref fc) = self.file_content {
+                    format!(" Preview: {}{} ", fc.path, visual_indicator)
+                } else {
+                    format!(" Preview{} ", visual_indicator)
+                }
+            }
+            PreviewType::PullRequest => {
+                if let Some(ref pr) = self.pr_preview {
+                    let state = if pr.is_draft { "DRAFT" } else { &pr.state };
+                    format!(" PR #{} [{}] ", pr.number, state)
+                } else {
+                    " Pull Request ".to_string()
+                }
+            }
         };
 
         let block = Block::new()
@@ -148,9 +824,157 @@ impl DiffView {
             return;
         }
 
-        match self.mode {
-            DiffMode::Inline => self.render_inline(inner, buf, theme),
-            DiffMode::SideBySide => self.render_side_by_side(inner, buf, theme),
+        // Clear the inner area first to prevent old content from showing
+        // Reset each cell individually to handle wide characters properly
+        for row in 0..inner.height {
+            for col in 0..inner.width {
+                let cell = buf.get_mut(inner.x + col, inner.y + row);
+                cell.reset();
+            }
+        }
+
+        match self.preview_type {
+            PreviewType::FileContent => self.render_file_content(inner, buf, theme),
+            PreviewType::Diff => match self.mode {
+                DiffMode::Inline => self.render_inline(inner, buf, theme),
+                DiffMode::SideBySide => self.render_side_by_side(inner, buf, theme),
+            },
+            PreviewType::PullRequest => self.render_pr_preview(inner, buf, theme),
+        }
+    }
+
+    fn render_pr_preview(&mut self, inner: Rect, buf: &mut Buffer, theme: &Theme) {
+        let Some(ref pr) = self.pr_preview else {
+            let msg = "No pull request selected";
+            let x = inner.x + (inner.width.saturating_sub(msg.len() as u16)) / 2;
+            let y = inner.y + inner.height / 2;
+            buf.set_string(x, y, msg, Style::new().fg(theme.untracked));
+            return;
+        };
+
+        // Build display lines
+        let mut lines: Vec<(String, Style)> = Vec::new();
+
+        // Title
+        lines.push((pr.title.clone(), Style::new().fg(theme.foreground).bold()));
+        lines.push((String::new(), Style::new()));
+
+        // Metadata
+        let state_color = if pr.is_draft {
+            theme.border_unfocused
+        } else {
+            match pr.state.as_str() {
+                "OPEN" => theme.diff_add,
+                "MERGED" => theme.diff_hunk,
+                "CLOSED" => theme.diff_remove,
+                _ => theme.foreground,
+            }
+        };
+        let state_str = if pr.is_draft {
+            "DRAFT".to_string()
+        } else {
+            pr.state.clone()
+        };
+        lines.push((
+            format!("State: {}", state_str),
+            Style::new().fg(state_color),
+        ));
+        lines.push((
+            format!("Author: {}", pr.author),
+            Style::new().fg(theme.foreground),
+        ));
+        lines.push((
+            format!("Branch: {} <- {}", pr.base_branch, pr.head_branch),
+            Style::new().fg(theme.branch_local),
+        ));
+        lines.push((
+            format!("Changes: +{} -{}", pr.additions, pr.deletions),
+            Style::new().fg(theme.foreground),
+        ));
+        if !pr.created_at.is_empty() {
+            // Format date (just take the date part if it's ISO format)
+            let date = pr.created_at.split('T').next().unwrap_or(&pr.created_at);
+            lines.push((
+                format!("Created: {}", date),
+                Style::new().fg(theme.border_unfocused),
+            ));
+        }
+        if !pr.url.is_empty() {
+            lines.push((
+                format!("URL: {}", pr.url),
+                Style::new().fg(theme.border_unfocused),
+            ));
+        }
+
+        // Separator
+        lines.push((String::new(), Style::new()));
+        lines.push((
+            "─".repeat(inner.width.saturating_sub(2) as usize),
+            Style::new().fg(theme.border),
+        ));
+        lines.push((String::new(), Style::new()));
+
+        // Body
+        if pr.body.is_empty() {
+            lines.push((
+                "No description provided.".to_string(),
+                Style::new().fg(theme.border_unfocused),
+            ));
+        } else {
+            // Split body into lines, handling long lines
+            for line in pr.body.lines() {
+                // Wrap long lines
+                let max_width = inner.width.saturating_sub(2) as usize;
+                if line.chars().count() <= max_width {
+                    lines.push((line.to_string(), Style::new().fg(theme.foreground)));
+                } else {
+                    // Simple word wrap
+                    let mut current_line = String::new();
+                    for word in line.split_whitespace() {
+                        if current_line.is_empty() {
+                            current_line = word.to_string();
+                        } else if current_line.chars().count() + 1 + word.chars().count()
+                            <= max_width
+                        {
+                            current_line.push(' ');
+                            current_line.push_str(word);
+                        } else {
+                            lines.push((current_line, Style::new().fg(theme.foreground)));
+                            current_line = word.to_string();
+                        }
+                    }
+                    if !current_line.is_empty() {
+                        lines.push((current_line, Style::new().fg(theme.foreground)));
+                    }
+                }
+            }
+        }
+
+        // Scroll handling
+        let visible_height = inner.height as usize;
+        let max_scroll = lines.len().saturating_sub(visible_height);
+        if self.scroll > max_scroll {
+            self.scroll = max_scroll;
+        }
+
+        // Render lines
+        let content_width = inner.width.saturating_sub(1); // Leave space for scrollbar
+        for (i, (line, style)) in lines
+            .iter()
+            .skip(self.scroll)
+            .take(visible_height)
+            .enumerate()
+        {
+            let y = inner.y + i as u16;
+            buf.set_string_truncated(inner.x, y, line, content_width, *style);
+        }
+
+        // Scrollbar
+        if lines.len() > visible_height {
+            let scrollbar =
+                crate::widgets::Scrollbar::new(lines.len(), visible_height, self.scroll);
+            let scrollbar_area = Rect::new(inner.x + inner.width - 1, inner.y, 1, inner.height);
+            scrollbar.render(scrollbar_area, buf, Style::new().fg(theme.border));
         }
     }
 
@@ -193,11 +1017,16 @@ impl DiffView {
         let visible_height = inner.height as usize;
         let content_area_width = inner.width.saturating_sub(1); // Leave space for scrollbar
 
-        // Calculate max content width and store view width
+        // Calculate max content width using display width (accounting for wide characters)
         self.view_width = (content_area_width.saturating_sub(line_num_width)) as usize;
-        self.max_content_width = lines.iter().map(|(_, _, _, content)| {
-            content.trim_end_matches('\n').chars().count() + 1 // +1 for prefix
-        }).max().unwrap_or(0) + 2; // +2 for scrollbar (1) + margin (1)
+        self.max_content_width = lines
+            .iter()
+            .map(|(_, _, _, content)| {
+                str_display_width(content.trim_end_matches('\n')) + 1 // +1 for prefix
+            })
+            .max()
+            .unwrap_or(0)
+            + 2; // +2 for scrollbar (1) + margin (1)
 
         // Clamp h_offset
         if self.max_content_width <= self.view_width {
@@ -219,10 +1048,19 @@ impl DiffView {
 
             // Line numbers
             if self.show_line_numbers {
-                let old_str = old_line.map(|n| format!("{:>3}", n)).unwrap_or_else(|| "   ".to_string());
-                let new_str = new_line.map(|n| format!("{:>3}", n)).unwrap_or_else(|| "   ".to_string());
+                let old_str = old_line
+                    .map(|n| format!("{:>3}", n))
+                    .unwrap_or_else(|| "   ".to_string());
+                let new_str = new_line
+                    .map(|n| format!("{:>3}", n))
+                    .unwrap_or_else(|| "   ".to_string());
                 let line_nums = format!("{} {} |", old_str, new_str);
-                buf.set_string(inner.x, y, &line_nums, Style::new().fg(theme.untracked).dim());
+                buf.set_string(
+                    inner.x,
+                    y,
+                    &line_nums,
+                    Style::new().fg(theme.untracked).dim(),
+                );
             }
 
             // Line content
@@ -230,8 +1068,13 @@ impl DiffView {
             let content_width = content_area_width.saturating_sub(line_num_width);
 
             let (prefix, style) = match line_type {
-                LineType::Addition => ("+", Style::new().fg(theme.diff_add)),
-                LineType::Deletion => ("-", Style::new().fg(theme.diff_remove)),
+                LineType::Addition => {
+                    ("+", Style::new().fg(theme.foreground).bg(theme.diff_add_bg))
+                }
+                LineType::Deletion => (
+                    "-",
+                    Style::new().fg(theme.foreground).bg(theme.diff_remove_bg),
+                ),
                 LineType::Context => {
                     if content.starts_with("@@") {
                         (" ", Style::new().fg(theme.diff_hunk).bold())
@@ -241,11 +1084,58 @@ impl DiffView {
                 }
             };
 
+            // Fill the entire line with background color for additions/deletions
+            // Use set_string_truncated to respect the content_width boundary
+            if matches!(line_type, LineType::Addition | LineType::Deletion) {
+                let blank = " ".repeat(content_width as usize);
+                buf.set_string_truncated(content_x, y, &blank, content_width, style);
+            }
+
             buf.set_string(content_x, y, prefix, style);
 
-            // Remove trailing newline from content
+            // Remove trailing newline from content and render character by character
+            // to properly handle wide characters at the boundary
             let content = content.trim_end_matches('\n');
-            buf.set_string_truncated(content_x + 1, y, content, content_width.saturating_sub(1), style);
+            let max_content_chars = content_width.saturating_sub(1); // -1 for prefix
+
+            // Get search matches for this line
+            let absolute_line = self.scroll + i;
+            let line_matches = self.get_line_search_matches(absolute_line);
+
+            let mut x_offset: u16 = 0;
+            let mut char_idx: usize = 0;
+            for c in content.chars() {
+                let cw = unicode_width(c) as u16;
+                if x_offset + cw > max_content_chars {
+                    break;
+                }
+
+                // Check if this character is part of a search match
+                let mut char_style = style;
+                for (match_start, match_end) in &line_matches {
+                    if char_idx >= *match_start && char_idx < *match_end {
+                        // Highlight matched text
+                        let is_current = self.is_current_match(absolute_line, *match_start);
+                        if is_current {
+                            char_style = Style::new().fg(theme.foreground).bg(theme.diff_hunk);
+                        } else {
+                            char_style = Style::new().fg(theme.diff_hunk);
+                        }
+                        break;
+                    }
+                }
+
+                buf.get_mut(content_x + 1 + x_offset, y)
+                    .set_char(c)
+                    .set_style(char_style);
+                if cw == 2 && x_offset + cw <= max_content_chars {
+                    buf.get_mut(content_x + 1 + x_offset + 1, y)
+                        .set_symbol("")
+                        .set_style(char_style);
+                }
+                x_offset += cw;
+                char_idx += 1;
+            }
         }
 
         // Render scrollbar
@@ -271,7 +1161,7 @@ impl DiffView {
                 // Hunk header spans both sides
                 pairs.push((
                     Some((0, hunk.header.clone())),
-                    Some((0, hunk.header.clone()))
+                    Some((0, hunk.header.clone())),
                 ));
 
                 // Collect deletions and additions separately, then pair them
@@ -287,10 +1177,7 @@ impl DiffView {
                             let old_no = line.old_lineno.unwrap_or(0);
                             let new_no = line.new_lineno.unwrap_or(0);
                             let content = line.content.trim_end_matches('\n').to_string();
-                            pairs.push((
-                                Some((old_no, content.clone())),
-                                Some((new_no, content))
-                            ));
+                            pairs.push((Some((old_no, content.clone())), Some((new_no, content))));
                         }
                         LineType::Deletion => {
                             let line_no = line.old_lineno.unwrap_or(0);
@@ -323,13 +1210,24 @@ impl DiffView {
         let half_width = total_width / 2;
         let line_num_width: u16 = 4;
 
-        // Calculate max content width for side-by-side mode
+        // Calculate max content width for side-by-side mode (using display width)
         self.view_width = (half_width.saturating_sub(line_num_width + 1)) as usize;
-        self.max_content_width = paired_lines.iter().map(|(left, right)| {
-            let left_len = left.as_ref().map(|(_, c)| c.chars().count()).unwrap_or(0);
-            let right_len = right.as_ref().map(|(_, c)| c.chars().count()).unwrap_or(0);
-            left_len.max(right_len)
-        }).max().unwrap_or(0) + 2; // +2 for scrollbar (1) + margin (1)
+        self.max_content_width = paired_lines
+            .iter()
+            .map(|(left, right)| {
+                let left_len = left
+                    .as_ref()
+                    .map(|(_, c)| str_display_width(c))
+                    .unwrap_or(0);
+                let right_len = right
+                    .as_ref()
+                    .map(|(_, c)| str_display_width(c))
+                    .unwrap_or(0);
+                left_len.max(right_len)
+            })
+            .max()
+            .unwrap_or(0)
+            + 2; // +2 for scrollbar (1) + margin (1)
 
         // Clamp h_offset
         if self.max_content_width <= self.view_width {
@@ -341,10 +1239,10 @@ impl DiffView {
             }
         }
 
-        // Draw separator line
+        // Draw separator line (seamless vertical line)
         let sep_x = inner.x + half_width;
         for y in inner.y..inner.y + inner.height {
-            buf.set_string(sep_x, y, "|", Style::new().fg(theme.border));
+            buf.set_string(sep_x, y, "│", Style::new().fg(theme.border));
         }
 
         for (i, (left, right)) in paired_lines
@@ -360,17 +1258,35 @@ impl DiffView {
             // Left side (old/deletion)
             if let Some((line_no, content)) = left {
                 let is_hunk_header = content.starts_with("@@");
-                let is_deletion = right.is_none() || (right.is_some() && left.as_ref().map(|(_, c)| c) != right.as_ref().map(|(_, c)| c));
+                let is_deletion = right.is_none()
+                    || (right.is_some()
+                        && left.as_ref().map(|(_, c)| c) != right.as_ref().map(|(_, c)| c));
 
                 let style = if is_hunk_header {
                     Style::new().fg(theme.diff_hunk).bold()
                 } else if is_deletion && !right.is_some() {
-                    Style::new().fg(theme.diff_remove)
-                } else if is_deletion && right.is_some() && left.as_ref().map(|(_, c)| c) != right.as_ref().map(|(_, c)| c) {
-                    Style::new().fg(theme.diff_remove)
+                    Style::new().fg(theme.foreground).bg(theme.diff_remove_bg)
+                } else if is_deletion
+                    && right.is_some()
+                    && left.as_ref().map(|(_, c)| c) != right.as_ref().map(|(_, c)| c)
+                {
+                    Style::new().fg(theme.foreground).bg(theme.diff_remove_bg)
                 } else {
                     Style::new().fg(theme.foreground)
                 };
+
+                // Fill line with background color for deletions
+                let is_colored = is_deletion && !is_hunk_header;
+                if is_colored {
+                    let blank = " ".repeat(left_content_width as usize);
+                    buf.set_string_truncated(
+                        inner.x + line_num_width,
+                        y,
+                        &blank,
+                        left_content_width,
+                        style,
+                    );
+                }
 
                 // Line number
                 if *line_no > 0 {
@@ -380,25 +1296,58 @@ impl DiffView {
                     buf.set_string(inner.x, y, "    ", Style::new().fg(theme.untracked).dim());
                 }
 
-                // Content
-                buf.set_string_truncated(inner.x + line_num_width, y, content, left_content_width, style);
+                // Content - render character by character for wide char handling
+                let mut x_off: u16 = 0;
+                for c in content.chars() {
+                    let cw = unicode_width(c) as u16;
+                    if x_off + cw > left_content_width {
+                        break;
+                    }
+                    buf.get_mut(inner.x + line_num_width + x_off, y)
+                        .set_char(c)
+                        .set_style(style);
+                    if cw == 2 && x_off + cw <= left_content_width {
+                        buf.get_mut(inner.x + line_num_width + x_off + 1, y)
+                            .set_symbol("")
+                            .set_style(style);
+                    }
+                    x_off += cw;
+                }
             }
 
             // Right side (new/addition)
             let right_x = sep_x + 1;
             if let Some((line_no, content)) = right {
                 let is_hunk_header = content.starts_with("@@");
-                let is_addition = left.is_none() || (left.is_some() && left.as_ref().map(|(_, c)| c) != right.as_ref().map(|(_, c)| c));
+                let is_addition = left.is_none()
+                    || (left.is_some()
+                        && left.as_ref().map(|(_, c)| c) != right.as_ref().map(|(_, c)| c));
 
                 let style = if is_hunk_header {
                     Style::new().fg(theme.diff_hunk).bold()
                 } else if is_addition && !left.is_some() {
-                    Style::new().fg(theme.diff_add)
-                } else if is_addition && left.is_some() && left.as_ref().map(|(_, c)| c) != right.as_ref().map(|(_, c)| c) {
-                    Style::new().fg(theme.diff_add)
+                    Style::new().fg(theme.foreground).bg(theme.diff_add_bg)
+                } else if is_addition
+                    && left.is_some()
+                    && left.as_ref().map(|(_, c)| c) != right.as_ref().map(|(_, c)| c)
+                {
+                    Style::new().fg(theme.foreground).bg(theme.diff_add_bg)
                 } else {
                     Style::new().fg(theme.foreground)
                 };
+
+                // Fill line with background color for additions
+                let is_colored = is_addition && !is_hunk_header;
+                if is_colored {
+                    let blank = " ".repeat(right_content_width as usize);
+                    buf.set_string_truncated(
+                        right_x + line_num_width,
+                        y,
+                        &blank,
+                        right_content_width,
+                        style,
+                    );
+                }
 
                 // Line number
                 if *line_no > 0 {
@@ -408,8 +1357,23 @@ impl DiffView {
                     buf.set_string(right_x, y, "    ", Style::new().fg(theme.untracked).dim());
                 }
 
-                // Content
-                buf.set_string_truncated(right_x + line_num_width, y, content, right_content_width, style);
+                // Content - render character by character for wide char handling
+                let mut x_off: u16 = 0;
+                for c in content.chars() {
+                    let cw = unicode_width(c) as u16;
+                    if x_off + cw > right_content_width {
+                        break;
+                    }
+                    buf.get_mut(right_x + line_num_width + x_off, y)
+                        .set_char(c)
+                        .set_style(style);
+                    if cw == 2 && x_off + cw <= right_content_width {
+                        buf.get_mut(right_x + line_num_width + x_off + 1, y)
+                            .set_symbol("")
+                            .set_style(style);
+                    }
+                    x_off += cw;
+                }
             }
         }
 
@@ -417,6 +1381,179 @@ impl DiffView {
         let scrollbar = Scrollbar::new(paired_lines.len(), visible_height, self.scroll);
         let scrollbar_area = Rect::new(inner.x + inner.width - 1, inner.y, 1, inner.height);
         scrollbar.render(scrollbar_area, buf, Style::new().fg(theme.border));
+    }
+
+    fn render_file_content(&mut self, inner: Rect, buf: &mut Buffer, _theme: &Theme) {
+        let visible_height = inner.height as usize;
+        let content_area_width = inner.width.saturating_sub(1); // Leave space for scrollbar
+
+        let (lines, path) = if let Some(ref fc) = self.file_content {
+            (fc.lines.clone(), fc.path.clone())
+        } else {
+            let msg = "No file selected";
+            let x = inner.x + (inner.width.saturating_sub(msg.len() as u16)) / 2;
+            let y = inner.y + inner.height / 2;
+            buf.set_string(x, y, msg, Style::new().fg(Color::Rgb(108, 112, 134)));
+            return;
+        };
+
+        // Adjust scroll
+        let max_scroll = lines.len().saturating_sub(inner.height as usize);
+        if self.scroll > max_scroll {
+            self.scroll = max_scroll;
+        }
+
+        let line_num_width = if self.show_line_numbers { 6 } else { 0 };
+
+        // Calculate max content width using display width (accounting for wide characters)
+        self.view_width = (content_area_width.saturating_sub(line_num_width)) as usize;
+        self.max_content_width = lines
+            .iter()
+            .map(|line| str_display_width(line))
+            .max()
+            .unwrap_or(0)
+            + 2;
+
+        // Clamp h_offset
+        if self.max_content_width <= self.view_width {
+            self.h_offset = 0;
+        } else {
+            let max_offset = self.max_content_width.saturating_sub(self.view_width);
+            if self.h_offset > max_offset {
+                self.h_offset = max_offset;
+            }
+        }
+
+        // Get selection range for visual mode
+        let (sel_start, sel_end) = if self.visual_mode {
+            self.get_selection_range()
+        } else {
+            (usize::MAX, usize::MAX)
+        };
+
+        for (i, content) in lines
+            .iter()
+            .skip(self.scroll)
+            .take(visible_height)
+            .enumerate()
+        {
+            let y = inner.y + i as u16;
+            let absolute_line = self.scroll + i;
+            let line_no = absolute_line + 1;
+
+            // Check if this line is selected in visual mode or is the cursor line
+            let is_selected =
+                self.visual_mode && absolute_line >= sel_start && absolute_line <= sel_end;
+            let is_cursor_line = absolute_line == self.cursor_line;
+            let selection_bg = Color::Rgb(60, 60, 100); // Dark blue selection
+            let cursor_bg = Color::Rgb(45, 45, 55); // Subtle highlight for cursor line
+
+            // Line numbers
+            if self.show_line_numbers {
+                let line_nums = format!("{:>4} │", line_no);
+                let num_style = if is_selected {
+                    Style::new().fg(Color::Rgb(108, 112, 134)).bg(selection_bg)
+                } else if is_cursor_line {
+                    Style::new().fg(Color::Rgb(150, 150, 170)).bg(cursor_bg)
+                } else {
+                    Style::new().fg(Color::Rgb(108, 112, 134)).dim()
+                };
+                buf.set_string(inner.x, y, &line_nums, num_style);
+            }
+
+            // Line content with syntax highlighting
+            let content_x = inner.x + line_num_width;
+            let content_width = content_area_width.saturating_sub(line_num_width);
+
+            // Fill background if selected or cursor line
+            if is_selected {
+                let blank = " ".repeat(content_width as usize);
+                buf.set_string_truncated(
+                    content_x,
+                    y,
+                    &blank,
+                    content_width,
+                    Style::new().bg(selection_bg),
+                );
+            } else if is_cursor_line {
+                let blank = " ".repeat(content_width as usize);
+                buf.set_string_truncated(
+                    content_x,
+                    y,
+                    &blank,
+                    content_width,
+                    Style::new().bg(cursor_bg),
+                );
+            }
+
+            // Get search matches for this line (for word-level highlighting)
+            let line_matches = self.get_line_search_matches(absolute_line);
+
+            // Render with syntax highlighting, using display width for positioning
+            let highlighter = SyntaxHighlighter::new(&path);
+            let tokens = highlighter.highlight_line(content);
+            let mut x_offset: u16 = 0;
+            let mut char_idx: usize = 0;
+            for (text, color) in tokens {
+                if x_offset >= content_width {
+                    break;
+                }
+                let base_style = if is_selected {
+                    Style::new().fg(color).bg(selection_bg)
+                } else if is_cursor_line {
+                    Style::new().fg(color).bg(cursor_bg)
+                } else {
+                    Style::new().fg(color)
+                };
+
+                // Render character by character to handle wide chars at boundary
+                for c in text.chars() {
+                    let cw = unicode_width(c) as u16;
+                    // Stop if this character would exceed the content area
+                    if x_offset + cw > content_width {
+                        break;
+                    }
+
+                    // Check if this character is part of a search match (word-level highlighting)
+                    let mut char_style = base_style;
+                    for (match_start, match_end) in &line_matches {
+                        if char_idx >= *match_start && char_idx < *match_end {
+                            let is_current = self.is_current_match(absolute_line, *match_start);
+                            if is_current {
+                                char_style = Style::new()
+                                    .fg(Color::Rgb(30, 30, 30))
+                                    .bg(Color::Rgb(255, 200, 100)); // Current match: bright yellow bg
+                            } else {
+                                char_style = Style::new().fg(Color::Rgb(255, 200, 100));
+                                // Other matches: yellow text
+                            }
+                            break;
+                        }
+                    }
+
+                    buf.get_mut(content_x + x_offset, y)
+                        .set_char(c)
+                        .set_style(char_style);
+                    // Mark continuation cell for wide characters
+                    if cw == 2 {
+                        buf.get_mut(content_x + x_offset + 1, y)
+                            .set_symbol("")
+                            .set_style(char_style);
+                    }
+                    x_offset += cw;
+                    char_idx += 1;
+                }
+            }
+        }
+
+        // Render scrollbar
+        let scrollbar = Scrollbar::new(lines.len(), visible_height, self.scroll);
+        let scrollbar_area = Rect::new(inner.x + inner.width - 1, inner.y, 1, inner.height);
+        scrollbar.render(
+            scrollbar_area,
+            buf,
+            Style::new().fg(Color::Rgb(108, 112, 134)),
+        );
     }
 
     fn flush_pairs(

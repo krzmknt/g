@@ -107,7 +107,15 @@ impl Buffer {
     }
 
     pub fn set_string<S: AsRef<str>>(&mut self, x: u16, y: u16, s: S, style: Style) {
-        self.set_string_truncated(x, y, s, self.area.width.saturating_sub(x.saturating_sub(self.area.x)), style);
+        self.set_string_truncated(
+            x,
+            y,
+            s,
+            self.area
+                .width
+                .saturating_sub(x.saturating_sub(self.area.x)),
+            style,
+        );
     }
 
     pub fn set_string_truncated<S: AsRef<str>>(
@@ -141,9 +149,14 @@ impl Buffer {
             cell.set_char(c).set_style(style);
 
             // For wide characters, mark the next cell as a continuation
-            if char_width == 2 && x + 1 < self.area.x + self.area.width {
-                let next_cell = self.get_mut(x + 1, y);
-                next_cell.set_symbol("").set_style(style);
+            // Only if continuation cell is within both buffer AND max_width bounds
+            if char_width == 2 {
+                let next_x = x + 1;
+                let next_width = width + 2;
+                if next_x < self.area.x + self.area.width && next_width <= max_width {
+                    let next_cell = self.get_mut(next_x, y);
+                    next_cell.set_symbol("").set_style(style);
+                }
             }
 
             x += char_width as u16;
@@ -184,11 +197,11 @@ impl Buffer {
     }
 }
 
-fn unicode_width(c: char) -> usize {
+pub fn unicode_width(c: char) -> usize {
     if c.is_ascii() {
         1
     } else {
-        // Simplified: treat most CJK as width 2, others as 1
+        // Treat CJK characters and emojis as width 2
         match c {
             '\u{1100}'..='\u{115F}' |
             '\u{2329}'..='\u{232A}' |
@@ -201,8 +214,17 @@ fn unicode_width(c: char) -> usize {
             '\u{FF00}'..='\u{FF60}' |
             '\u{FFE0}'..='\u{FFE6}' |
             '\u{20000}'..='\u{2FFFD}' |
-            '\u{30000}'..='\u{3FFFD}' => 2,
+            '\u{30000}'..='\u{3FFFD}' |
+            // Emojis (true wide characters in most terminals)
+            '\u{1F300}'..='\u{1F9FF}' |  // Misc Symbols and Pictographs, Emoticons, etc.
+            '\u{1FA00}'..='\u{1FAFF}' => 2,  // Chess, symbols, etc.
+            // Note: Dingbats (U+2700-U+27BF) and Misc Symbols (U+2600-U+26FF) are narrow in most terminals
             _ => 1,
         }
     }
+}
+
+/// Calculate display width of a string (accounting for wide characters)
+pub fn str_display_width(s: &str) -> usize {
+    s.chars().map(unicode_width).sum()
 }

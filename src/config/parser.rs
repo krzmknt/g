@@ -1,5 +1,5 @@
-use std::collections::HashMap;
 use crate::error::{Error, Result};
+use std::collections::HashMap;
 
 #[derive(Debug, Clone)]
 pub enum Value {
@@ -43,7 +43,11 @@ impl<'a> Parser<'a> {
 
             if self.peek() == Some('[') {
                 self.current_table = self.parse_table_header()?;
-            } else if self.peek().map(|c| c.is_alphanumeric() || c == '_' || c == '"').unwrap_or(false) {
+            } else if self
+                .peek()
+                .map(|c| c.is_alphanumeric() || c == '_' || c == '"')
+                .unwrap_or(false)
+            {
                 let (key, value) = self.parse_key_value()?;
                 self.insert_value(&mut root, &self.current_table.clone(), &key, value);
             } else {
@@ -215,11 +219,13 @@ impl<'a> Parser<'a> {
         }
 
         if is_float {
-            num_str.parse::<f64>()
+            num_str
+                .parse::<f64>()
                 .map(Value::Float)
                 .map_err(|_| Error::Config(format!("Invalid float: {}", num_str)))
         } else {
-            num_str.parse::<i64>()
+            num_str
+                .parse::<i64>()
                 .map(Value::Integer)
                 .map_err(|_| Error::Config(format!("Invalid integer: {}", num_str)))
         }
@@ -291,11 +297,20 @@ impl<'a> Parser<'a> {
         Ok(Value::Table(table))
     }
 
-    fn insert_value(&self, root: &mut HashMap<String, Value>, path: &[String], key: &str, value: Value) {
+    fn insert_value(
+        &self,
+        root: &mut HashMap<String, Value>,
+        path: &[String],
+        key: &str,
+        value: Value,
+    ) {
         let mut current = root;
 
         for segment in path {
-            current = match current.entry(segment.clone()).or_insert_with(|| Value::Table(HashMap::new())) {
+            current = match current
+                .entry(segment.clone())
+                .or_insert_with(|| Value::Table(HashMap::new()))
+            {
                 Value::Table(t) => t,
                 _ => return, // Invalid path
             };
@@ -315,7 +330,10 @@ impl<'a> Parser<'a> {
     fn expect(&mut self, expected: char) -> Result<()> {
         match self.advance() {
             Some(c) if c == expected => Ok(()),
-            Some(c) => Err(Error::Config(format!("Expected '{}', got '{}'", expected, c))),
+            Some(c) => Err(Error::Config(format!(
+                "Expected '{}', got '{}'",
+                expected, c
+            ))),
             None => Err(Error::Config(format!("Expected '{}', got EOF", expected))),
         }
     }
