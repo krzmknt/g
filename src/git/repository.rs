@@ -1466,9 +1466,101 @@ impl Repository {
         Ok(())
     }
 
+    /// Format refs for display: remove HEAD/xxx/HEAD, show local -> remote tracking
+    fn format_refs_for_display(refs_str: &str, remotes: &[String]) -> Vec<String> {
+        let raw_refs: Vec<&str> = refs_str.split(", ").map(|s| s.trim()).filter(|s| !s.is_empty()).collect();
+
+        let mut local_branches: Vec<String> = Vec::new();
+        let mut remote_branches: Vec<&str> = Vec::new();
+        let mut other_refs: Vec<&str> = Vec::new();
+
+        for r in &raw_refs {
+            if r.starts_with("HEAD -> ") {
+                // Extract branch name from "HEAD -> main"
+                local_branches.push(r[8..].to_string());
+            } else if *r == "HEAD" {
+                // Skip HEAD
+                continue;
+            } else if r.starts_with("tag: ") {
+                other_refs.push(r);
+            } else {
+                // Check if this is a remote tracking branch (starts with any remote name + /)
+                let is_remote = remotes.iter().any(|remote| {
+                    r.starts_with(&format!("{}/", remote))
+                });
+
+                if is_remote {
+                    // Skip remote/HEAD
+                    if r.ends_with("/HEAD") {
+                        continue;
+                    }
+                    remote_branches.push(r);
+                } else {
+                    // Local branch (may contain / like feature/xxx)
+                    local_branches.push(r.to_string());
+                }
+            }
+        }
+
+        let mut result: Vec<String> = Vec::new();
+
+        // Add tags first
+        for r in &other_refs {
+            result.push(r.to_string());
+        }
+
+        // Match local branches with their remote tracking branches
+        let mut used_remotes: std::collections::HashSet<&str> = std::collections::HashSet::new();
+
+        for local in &local_branches {
+            // Look for matching remote: <remote>/<local> for any remote
+            let matching_remote = remote_branches.iter().find(|&&r| {
+                remotes.iter().any(|remote_name| {
+                    r == format!("{}/{}", remote_name, local)
+                })
+            });
+
+            if let Some(&remote) = matching_remote {
+                result.push(format!("{} -> {}", local, remote));
+                used_remotes.insert(remote);
+            } else {
+                result.push(local.clone());
+            }
+        }
+
+        // Add remaining remote branches
+        for remote in &remote_branches {
+            if !used_remotes.contains(remote) {
+                // Extract branch name from remote (e.g., "origin/feature" -> "feature")
+                let branch_name = if let Some(pos) = remote.find('/') {
+                    &remote[pos + 1..]
+                } else {
+                    *remote
+                };
+
+                let has_local = local_branches.iter().any(|l| l == branch_name);
+                if !has_local {
+                    result.push(remote.to_string());
+                }
+            }
+        }
+
+        result
+    }
+
     // Log graph operations - use git command for proper graph rendering
     pub fn log_graph(&self, max_count: usize) -> Result<Vec<GraphLine>> {
         use std::process::Command;
+
+        // Get list of remotes for ref parsing
+        let remotes_output = Command::new("git")
+            .args(["remote"])
+            .current_dir(&self.path)
+            .output()?;
+        let remotes: Vec<String> = String::from_utf8_lossy(&remotes_output.stdout)
+            .lines()
+            .map(|s| s.to_string())
+            .collect();
 
         // Use git log --graph for proper ASCII art
         let output = Command::new("git")
@@ -1476,6 +1568,7 @@ impl Repository {
                 "log",
                 "--graph",
                 "--all",
+                "--date-order",
                 "--format=%H|%h|%s|%an|%at|%P|%D",
                 &format!("-{}", max_count),
             ])
@@ -1548,11 +1641,7 @@ impl Repository {
                     let refs: Vec<String> = if parts[6].is_empty() {
                         Vec::new()
                     } else {
-                        parts[6]
-                            .split(", ")
-                            .map(|s| s.trim().to_string())
-                            .filter(|s| !s.is_empty())
-                            .collect()
+                        Self::format_refs_for_display(parts[6], &remotes)
                     };
 
                     lines.push(GraphLine::Commit(GraphCommit {

@@ -740,41 +740,105 @@ impl CommitsView {
             current_pos += bracket_open_len;
 
             // Render each ref with its own color
+            // Handle "local -> remote" format by splitting and coloring separately
             for (i, ref_name) in commit.refs.iter().enumerate() {
-                let ref_display = if i == 0 {
-                    ref_name.clone()
-                } else {
-                    format!(", {}", ref_name)
-                };
+                let separator = if i == 0 { "" } else { ", " };
 
-                let ref_len = ref_display.chars().count();
-                let ref_end = current_pos + ref_len;
+                // Check if this ref has "local -> remote" format
+                if let Some(arrow_pos) = ref_name.find(" -> ") {
+                    let local_part = &ref_name[..arrow_pos];
+                    let arrow_and_remote = &ref_name[arrow_pos..]; // " -> origin/xxx"
 
-                // Check if this ref is visible
-                if ref_end > visible_start && current_pos < visible_start + width as usize {
-                    let skip = visible_start.saturating_sub(current_pos);
-                    let screen_x = if current_pos >= visible_start {
-                        screen_start + (current_pos - visible_start)
-                    } else {
-                        screen_start
-                    };
+                    // Render separator
+                    if !separator.is_empty() {
+                        let sep_end = current_pos + separator.len();
+                        if sep_end > visible_start && current_pos < visible_start + width as usize {
+                            let skip = visible_start.saturating_sub(current_pos);
+                            let screen_x = if current_pos >= visible_start {
+                                screen_start + (current_pos - visible_start)
+                            } else {
+                                screen_start
+                            };
+                            if screen_x < width as usize {
+                                let available = (width as usize).saturating_sub(screen_x);
+                                let part: String = separator.chars().skip(skip).take(available).collect();
+                                if !part.is_empty() {
+                                    buf.set_string(x + screen_x as u16, y, &part, Style::new().fg(theme.branch_local));
+                                }
+                            }
+                        }
+                        current_pos += separator.len();
+                    }
 
-                    if screen_x < width as usize {
-                        let available = (width as usize).saturating_sub(screen_x);
-                        let part: String = ref_display.chars().skip(skip).take(available).collect();
-                        if !part.is_empty() {
-                            let color = self.get_single_ref_color(ref_name, theme);
-                            buf.set_string(
-                                x + screen_x as u16,
-                                y,
-                                &part,
-                                Style::new().fg(color),
-                            );
+                    // Render local part (blue)
+                    let local_len = local_part.chars().count();
+                    let local_end = current_pos + local_len;
+                    if local_end > visible_start && current_pos < visible_start + width as usize {
+                        let skip = visible_start.saturating_sub(current_pos);
+                        let screen_x = if current_pos >= visible_start {
+                            screen_start + (current_pos - visible_start)
+                        } else {
+                            screen_start
+                        };
+                        if screen_x < width as usize {
+                            let available = (width as usize).saturating_sub(screen_x);
+                            let part: String = local_part.chars().skip(skip).take(available).collect();
+                            if !part.is_empty() {
+                                buf.set_string(x + screen_x as u16, y, &part, Style::new().fg(theme.branch_local));
+                            }
                         }
                     }
-                }
+                    current_pos = local_end;
 
-                current_pos = ref_end;
+                    // Render " -> remote" part (purple)
+                    let remote_len = arrow_and_remote.chars().count();
+                    let remote_end = current_pos + remote_len;
+                    if remote_end > visible_start && current_pos < visible_start + width as usize {
+                        let skip = visible_start.saturating_sub(current_pos);
+                        let screen_x = if current_pos >= visible_start {
+                            screen_start + (current_pos - visible_start)
+                        } else {
+                            screen_start
+                        };
+                        if screen_x < width as usize {
+                            let available = (width as usize).saturating_sub(screen_x);
+                            let part: String = arrow_and_remote.chars().skip(skip).take(available).collect();
+                            if !part.is_empty() {
+                                buf.set_string(x + screen_x as u16, y, &part, Style::new().fg(theme.branch_remote));
+                            }
+                        }
+                    }
+                    current_pos = remote_end;
+                } else {
+                    // Regular ref without " -> "
+                    let ref_display = format!("{}{}", separator, ref_name);
+                    let ref_len = ref_display.chars().count();
+                    let ref_end = current_pos + ref_len;
+
+                    if ref_end > visible_start && current_pos < visible_start + width as usize {
+                        let skip = visible_start.saturating_sub(current_pos);
+                        let screen_x = if current_pos >= visible_start {
+                            screen_start + (current_pos - visible_start)
+                        } else {
+                            screen_start
+                        };
+
+                        if screen_x < width as usize {
+                            let available = (width as usize).saturating_sub(screen_x);
+                            let part: String = ref_display.chars().skip(skip).take(available).collect();
+                            if !part.is_empty() {
+                                let color = self.get_single_ref_color(ref_name, theme);
+                                buf.set_string(
+                                    x + screen_x as u16,
+                                    y,
+                                    &part,
+                                    Style::new().fg(color),
+                                );
+                            }
+                        }
+                    }
+                    current_pos = ref_end;
+                }
             }
             
             // Closing bracket "] " (with trailing space)
@@ -858,32 +922,36 @@ impl CommitsView {
             return String::new();
         }
 
-        // Separate local branches, remote branches, and other refs (tags, HEAD)
-        let mut local_branches: Vec<&str> = Vec::new();
+        // Separate local branches, remote branches, and other refs (tags)
+        let mut local_branches: Vec<String> = Vec::new();
         let mut remote_branches: Vec<&str> = Vec::new();
         let mut other_refs: Vec<&str> = Vec::new();
 
         for r in refs {
             let r = r.as_str();
             if r.starts_with("HEAD -> ") {
-                // HEAD -> main, keep as is but extract the branch name
-                other_refs.push(r);
-            } else if r == "HEAD" {
-                other_refs.push(r);
+                // Extract branch name from "HEAD -> main", treat as local branch
+                local_branches.push(r[8..].to_string());
+            } else if r == "HEAD" || r == "origin/HEAD" {
+                // Skip HEAD and origin/HEAD entirely
+                continue;
             } else if r.starts_with("tag: ") {
                 other_refs.push(r);
-            } else if r.starts_with("origin/") || r.starts_with("upstream/") || r.contains('/') {
+            } else if r.starts_with("origin/") || r.starts_with("upstream/") {
                 // Remote tracking branch
+                remote_branches.push(r);
+            } else if r.contains('/') {
+                // Other remote (e.g., other-remote/branch)
                 remote_branches.push(r);
             } else {
                 // Local branch
-                local_branches.push(r);
+                local_branches.push(r.to_string());
             }
         }
 
         let mut result: Vec<String> = Vec::new();
 
-        // Add other refs first (HEAD, tags)
+        // Add other refs first (tags)
         for r in &other_refs {
             result.push(r.to_string());
         }
@@ -910,11 +978,30 @@ impl CommitsView {
             }
         }
 
-        // Add remaining remote branches that weren't matched
+        // Add remaining remote branches that don't have a matching local
         for remote in &remote_branches {
-            if !used_remotes.contains(remote) {
-                result.push(remote.to_string());
+            if used_remotes.contains(remote) {
+                continue;
             }
+
+            // Extract branch name from remote (e.g., "origin/feature" -> "feature")
+            let branch_name = if remote.starts_with("origin/") {
+                &remote[7..]
+            } else if remote.starts_with("upstream/") {
+                &remote[9..]
+            } else if let Some(pos) = remote.find('/') {
+                &remote[pos + 1..]
+            } else {
+                *remote
+            };
+
+            // Check if there's a matching local branch (already handled above)
+            let has_local = local_branches.iter().any(|l| l == branch_name);
+            if has_local {
+                continue;
+            }
+
+            result.push(remote.to_string());
         }
 
         result.join(", ")
@@ -1219,41 +1306,105 @@ impl CommitsView {
             }
             current_ref_pos += bracket_open_len;
 
+            // Render each ref with color - handle "local -> remote" format
             for (i, ref_name) in commit.refs.iter().enumerate() {
-                let ref_display = if i == 0 {
-                    ref_name.clone()
-                } else {
-                    format!(", {}", ref_name)
-                };
+                let separator = if i == 0 { "" } else { ", " };
 
-                let ref_len = ref_display.chars().count();
-                let ref_end = current_ref_pos + ref_len;
+                // Check if this ref has "local -> remote" format
+                if let Some(arrow_pos) = ref_name.find(" -> ") {
+                    let local_part = &ref_name[..arrow_pos];
+                    let arrow_and_remote = &ref_name[arrow_pos..];
 
-                // Check if this ref is visible
-                if ref_end > visible_start && current_ref_pos < visible_start + width as usize {
-                    let skip = visible_start.saturating_sub(current_ref_pos);
-                    let screen_x = if current_ref_pos >= visible_start {
-                        screen_start + (current_ref_pos - visible_start)
-                    } else {
-                        screen_start
-                    };
+                    // Render separator
+                    if !separator.is_empty() {
+                        let sep_end = current_ref_pos + separator.len();
+                        if sep_end > visible_start && current_ref_pos < visible_start + width as usize {
+                            let skip = visible_start.saturating_sub(current_ref_pos);
+                            let screen_x = if current_ref_pos >= visible_start {
+                                screen_start + (current_ref_pos - visible_start)
+                            } else {
+                                screen_start
+                            };
+                            if screen_x < width as usize {
+                                let available = (width as usize).saturating_sub(screen_x);
+                                let part: String = separator.chars().skip(skip).take(available).collect();
+                                if !part.is_empty() {
+                                    buf.set_string(x + screen_x as u16, y, &part, Style::new().fg(theme.branch_local));
+                                }
+                            }
+                        }
+                        current_ref_pos += separator.len();
+                    }
 
-                    if screen_x < width as usize {
-                        let available = (width as usize).saturating_sub(screen_x);
-                        let part: String = ref_display.chars().skip(skip).take(available).collect();
-                        if !part.is_empty() {
-                            let color = self.get_single_ref_color(ref_name, theme);
-                            buf.set_string(
-                                x + screen_x as u16,
-                                y,
-                                &part,
-                                Style::new().fg(color),
-                            );
+                    // Render local part (blue)
+                    let local_len = local_part.chars().count();
+                    let local_end = current_ref_pos + local_len;
+                    if local_end > visible_start && current_ref_pos < visible_start + width as usize {
+                        let skip = visible_start.saturating_sub(current_ref_pos);
+                        let screen_x = if current_ref_pos >= visible_start {
+                            screen_start + (current_ref_pos - visible_start)
+                        } else {
+                            screen_start
+                        };
+                        if screen_x < width as usize {
+                            let available = (width as usize).saturating_sub(screen_x);
+                            let part: String = local_part.chars().skip(skip).take(available).collect();
+                            if !part.is_empty() {
+                                buf.set_string(x + screen_x as u16, y, &part, Style::new().fg(theme.branch_local));
+                            }
                         }
                     }
-                }
+                    current_ref_pos = local_end;
 
-                current_ref_pos = ref_end;
+                    // Render " -> remote" part (purple)
+                    let remote_len = arrow_and_remote.chars().count();
+                    let remote_end = current_ref_pos + remote_len;
+                    if remote_end > visible_start && current_ref_pos < visible_start + width as usize {
+                        let skip = visible_start.saturating_sub(current_ref_pos);
+                        let screen_x = if current_ref_pos >= visible_start {
+                            screen_start + (current_ref_pos - visible_start)
+                        } else {
+                            screen_start
+                        };
+                        if screen_x < width as usize {
+                            let available = (width as usize).saturating_sub(screen_x);
+                            let part: String = arrow_and_remote.chars().skip(skip).take(available).collect();
+                            if !part.is_empty() {
+                                buf.set_string(x + screen_x as u16, y, &part, Style::new().fg(theme.branch_remote));
+                            }
+                        }
+                    }
+                    current_ref_pos = remote_end;
+                } else {
+                    // Regular ref without " -> "
+                    let ref_display = format!("{}{}", separator, ref_name);
+                    let ref_len = ref_display.chars().count();
+                    let ref_end = current_ref_pos + ref_len;
+
+                    if ref_end > visible_start && current_ref_pos < visible_start + width as usize {
+                        let skip = visible_start.saturating_sub(current_ref_pos);
+                        let screen_x = if current_ref_pos >= visible_start {
+                            screen_start + (current_ref_pos - visible_start)
+                        } else {
+                            screen_start
+                        };
+
+                        if screen_x < width as usize {
+                            let available = (width as usize).saturating_sub(screen_x);
+                            let part: String = ref_display.chars().skip(skip).take(available).collect();
+                            if !part.is_empty() {
+                                let color = self.get_single_ref_color(ref_name, theme);
+                                buf.set_string(
+                                    x + screen_x as u16,
+                                    y,
+                                    &part,
+                                    Style::new().fg(color),
+                                );
+                            }
+                        }
+                    }
+                    current_ref_pos = ref_end;
+                }
             }
             
             // Closing bracket "]"
