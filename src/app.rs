@@ -63,6 +63,7 @@ pub enum Mode {
 pub enum SelectAction {
     ResetOrRevert,  // Choose between reset and revert
     ResetMode,      // Choose reset mode: --soft, --mixed, --hard
+    PrMergeMethod,  // Choose PR merge method: merge, rebase, squash
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -91,6 +92,7 @@ pub enum ConfirmAction {
     Push,
     StashDrop,
     CommitRevert,
+    PrMerge,
 }
 
 pub struct App {
@@ -141,6 +143,9 @@ pub struct App {
 
     // Selection dialog state (current selected index)
     pub select_index: usize,
+
+    // PR merge method (0: merge, 1: rebase, 2: squash)
+    pr_merge_method: usize,
 
     // Async loading channel for GitHub API calls
     async_sender: Sender<AsyncLoadResult>,
@@ -264,6 +269,7 @@ impl App {
             confirm_target: None,
             merged_branches_to_delete: None,
             select_index: 0,
+            pr_merge_method: 0,
             async_sender,
             async_receiver,
             repo_path,
@@ -1272,6 +1278,7 @@ impl App {
                 can_scroll_left,
                 can_scroll_right,
                 self.select_index,
+                self.pr_merge_method,
             );
 
             // Remote operation spinner in footer (right-aligned, above logo)
@@ -1368,6 +1375,7 @@ impl App {
         can_scroll_left: bool,
         can_scroll_right: bool,
         select_index: usize,
+        pr_merge_method: usize,
     ) {
         // Message line (top of footer)
         if let Some(msg) = message {
@@ -1474,7 +1482,7 @@ impl App {
                         ("b", "blame"),
                     ],
                     PanelType::Conflicts => &[("o", "use ours"), ("t", "use theirs")],
-                    PanelType::PullRequests => &[],
+                    PanelType::PullRequests => &[("M", "merge"), ("R", "reload")],
                     PanelType::Issues => &[],
                     PanelType::Actions => &[],
                     PanelType::Releases => &[],
@@ -1571,6 +1579,19 @@ impl App {
                         "Delete merged branches? ({})",
                         confirm_target.as_deref().unwrap_or("0 local, 0 remote")
                     ),
+                    ConfirmAction::PrMerge => {
+                        let method = match pr_merge_method {
+                            0 => "merge",
+                            1 => "rebase",
+                            2 => "squash",
+                            _ => "merge",
+                        };
+                        format!(
+                            "Merge PR #{} with {}?",
+                            confirm_target.as_deref().unwrap_or("?"),
+                            method
+                        )
+                    }
                 };
                 let warn_style = Style::new().fg(theme.diff_remove).bold();
                 buf.set_string(area.x + 1, area.y + 1, &action_desc, warn_style);
@@ -1615,6 +1636,11 @@ impl App {
                     .map(|s| &s[..7.min(s.len())])
                     .unwrap_or("?");
 
+                let pr_number = confirm_target
+                    .as_deref()
+                    .and_then(|s| s.parse::<u32>().ok())
+                    .unwrap_or(0);
+
                 let (title, options): (&str, Vec<(&str, &str, &str)>) = match action {
                     SelectAction::ResetOrRevert => (
                         &format!("Reset/Revert commit {}", commit_id_short),
@@ -1629,6 +1655,14 @@ impl App {
                             ("1", "soft", "repo:reset, index:keep, working:keep"),
                             ("2", "mixed", "repo:reset, index:reset, working:keep"),
                             ("3", "hard", "repo:reset, index:reset, working:reset"),
+                        ],
+                    ),
+                    SelectAction::PrMergeMethod => (
+                        &format!("Merge PR #{}", pr_number),
+                        vec![
+                            ("1", "merge", "Create a merge commit"),
+                            ("2", "rebase", "Rebase and merge"),
+                            ("3", "squash", "Squash and merge"),
                         ],
                     ),
                 };
@@ -1792,6 +1826,7 @@ impl App {
         let option_count = match action {
             SelectAction::ResetOrRevert => 2,
             SelectAction::ResetMode => 3,
+            SelectAction::PrMergeMethod => 3,
         };
 
         match key.code {
@@ -1880,6 +1915,11 @@ impl App {
                 self.mode = Mode::Normal;
                 self.confirm_target = None;
                 self.select_index = 0;
+            }
+            SelectAction::PrMergeMethod => {
+                // Store the merge method and go to confirmation
+                self.pr_merge_method = self.select_index;
+                self.mode = Mode::Confirm(ConfirmAction::PrMerge);
             }
         }
         Ok(())
@@ -2043,6 +2083,52 @@ impl App {
                     }
                     self.refresh_branches()?;
                 }
+            }
+            ConfirmAction::PrMerge => {
+                if let Some(ref pr_number_str) = self.confirm_target {
+                    if let Ok(pr_number) = pr_number_str.parse::<u32>() {
+                        let method = match self.pr_merge_method {
+                            0 => "--merge",
+                            1 => "--rebase",
+                            2 => "--squash",
+                            _ => "--merge",
+                        };
+                        let method_name = match self.pr_merge_method {
+                            0 => "merge",
+                            1 => "rebase",
+                            2 => "squash",
+                            _ => "merge",
+                        };
+
+                        // Run gh pr merge command
+                        let output = std::process::Command::new("gh")
+                            .args(["pr", "merge", &pr_number.to_string(), method, "--delete-branch"])
+                            .current_dir(&self.repo_path)
+                            .output();
+
+                        match output {
+                            Ok(result) => {
+                                if result.status.success() {
+                                    self.message = Some(format!(
+                                        "Merged PR #{} with {}",
+                                        pr_number, method_name
+                                    ));
+                                    // Refresh PRs and branches
+                                    self.start_loading_pull_requests();
+                                    self.refresh_branches()?;
+                                    self.refresh_commits()?;
+                                } else {
+                                    let stderr = String::from_utf8_lossy(&result.stderr);
+                                    self.message = Some(format!("Merge failed: {}", stderr.trim()));
+                                }
+                            }
+                            Err(e) => {
+                                self.message = Some(format!("Failed to run gh: {}", e));
+                            }
+                        }
+                    }
+                }
+                self.pr_merge_method = 0;
             }
         }
         Ok(())
@@ -3225,6 +3311,21 @@ impl App {
                 if self.pull_requests_view.can_retry() {
                     self.start_loading_pull_requests();
                     self.message = Some("Loading pull requests...".to_string());
+                }
+            }
+
+            // Merge PR
+            KeyCode::Char('M') if self.focused_panel == PanelType::PullRequests => {
+                if let Some(pr) = self.pull_requests_view.selected_pr() {
+                    if pr.state == "OPEN" && !pr.is_draft {
+                        self.confirm_target = Some(pr.number.to_string());
+                        self.select_index = 0;
+                        self.mode = Mode::Select(SelectAction::PrMergeMethod);
+                    } else if pr.is_draft {
+                        self.message = Some("Cannot merge draft PR".to_string());
+                    } else {
+                        self.message = Some(format!("PR is already {}", pr.state.to_lowercase()));
+                    }
                 }
             }
             KeyCode::Char('R') if self.focused_panel == PanelType::Issues => {
