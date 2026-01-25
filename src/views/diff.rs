@@ -14,6 +14,7 @@ pub enum PreviewType {
     Diff,
     FileContent,
     PullRequest,
+    Commit,
 }
 
 #[derive(Debug, Clone)]
@@ -55,6 +56,17 @@ impl From<&PullRequestInfo> for PullRequestPreview {
             created_at: pr.created_at.clone(),
         }
     }
+}
+
+#[derive(Debug, Clone)]
+pub struct CommitPreview {
+    pub id: String,
+    pub short_id: String,
+    pub message: String,
+    pub author: String,
+    pub email: String,
+    pub date: String,
+    pub refs: Vec<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -330,6 +342,7 @@ pub struct DiffView {
     pub preview_type: PreviewType,
     pub file_content: Option<FileContent>,
     pub pr_preview: Option<PullRequestPreview>,
+    pub commit_preview: Option<CommitPreview>,
     // Visual mode (line selection)
     pub visual_mode: bool,
     pub visual_start: usize, // Starting line of selection
@@ -354,6 +367,7 @@ impl DiffView {
             preview_type: PreviewType::Diff,
             file_content: None,
             pr_preview: None,
+            commit_preview: None,
             visual_mode: false,
             visual_start: 0,
             cursor_line: 0,
@@ -367,6 +381,39 @@ impl DiffView {
         self.pr_preview = Some(PullRequestPreview::from(pr));
         self.preview_type = PreviewType::PullRequest;
         self.scroll = 0;
+    }
+
+    pub fn set_commit_preview(&mut self, commit: &crate::git::CommitInfo) {
+        // Simple timestamp formatting
+        let secs = commit.time;
+        let days = secs / 86400;
+        let years = 1970 + days / 365;
+        let remaining_days = days % 365;
+        let months = remaining_days / 30 + 1;
+        let day = remaining_days % 30 + 1;
+        let hours = (secs % 86400) / 3600;
+        let minutes = (secs % 3600) / 60;
+        let date = format!("{:04}-{:02}-{:02} {:02}:{:02}", years, months, day, hours, minutes);
+
+        self.commit_preview = Some(CommitPreview {
+            id: commit.id.clone(),
+            short_id: commit.short_id.clone(),
+            message: commit.message.clone(),
+            author: commit.author.clone(),
+            email: commit.email.clone(),
+            date,
+            refs: commit.refs.clone(),
+        });
+        self.preview_type = PreviewType::Commit;
+        self.scroll = 0;
+        self.h_offset = 0;
+    }
+
+    pub fn clear_commit_preview(&mut self) {
+        self.commit_preview = None;
+        if self.preview_type == PreviewType::Commit {
+            self.preview_type = PreviewType::Diff;
+        }
     }
 
     pub fn clear_pr_preview(&mut self) {
@@ -624,6 +671,10 @@ impl DiffView {
                 // PR preview doesn't support text selection
                 None
             }
+            PreviewType::Commit => {
+                // Commit preview doesn't support text selection
+                None
+            }
         }
     }
 
@@ -649,6 +700,10 @@ impl DiffView {
             }
             PreviewType::PullRequest => {
                 // PR preview line count not tracked for visual mode
+                0
+            }
+            PreviewType::Commit => {
+                // Commit preview line count not tracked for visual mode
                 0
             }
         }
@@ -693,6 +748,14 @@ impl DiffView {
                 // PR preview: search in body
                 if let Some(ref pr) = self.pr_preview {
                     pr.body.lines().map(|s| s.to_string()).collect()
+                } else {
+                    Vec::new()
+                }
+            }
+            PreviewType::Commit => {
+                // Commit preview: search in message
+                if let Some(ref commit) = self.commit_preview {
+                    commit.message.lines().map(|s| s.to_string()).collect()
                 } else {
                     Vec::new()
                 }
@@ -810,6 +873,13 @@ impl DiffView {
                     " Pull Request ".to_string()
                 }
             }
+            PreviewType::Commit => {
+                if let Some(ref commit) = self.commit_preview {
+                    format!(" Commit: {} ", commit.short_id)
+                } else {
+                    " Commit ".to_string()
+                }
+            }
         };
 
         let block = Block::new()
@@ -840,6 +910,60 @@ impl DiffView {
                 DiffMode::SideBySide => self.render_side_by_side(inner, buf, theme),
             },
             PreviewType::PullRequest => self.render_pr_preview(inner, buf, theme),
+            PreviewType::Commit => self.render_commit_preview(inner, buf, theme),
+        }
+    }
+
+    fn render_commit_preview(&mut self, inner: Rect, buf: &mut Buffer, theme: &Theme) {
+        let Some(ref commit) = self.commit_preview else {
+            let msg = "No commit selected";
+            let x = inner.x + (inner.width.saturating_sub(msg.len() as u16)) / 2;
+            let y = inner.y + inner.height / 2;
+            buf.set_string(x, y, msg, Style::new().fg(theme.untracked));
+            return;
+        };
+
+        let width = inner.width as usize;
+        let mut lines: Vec<(String, Color)> = Vec::new();
+
+        // Header info
+        lines.push((format!("commit {}", commit.id), theme.diff_hunk));
+        lines.push((format!("Author: {} <{}>", commit.author, commit.email), theme.foreground));
+        lines.push((format!("Date:   {}", commit.date), theme.foreground));
+
+        // Refs (if any)
+        if !commit.refs.is_empty() {
+            lines.push((format!("Refs:   {}", commit.refs.join(", ")), theme.branch_current));
+        }
+
+        // Empty line before message
+        lines.push((String::new(), theme.foreground));
+
+        // Message (may be multiline)
+        for line in commit.message.lines() {
+            lines.push((format!("    {}", line), theme.foreground));
+        }
+
+        // Render with scrolling
+        let visible_height = inner.height as usize;
+        let total_lines = lines.len();
+
+        // Clamp scroll
+        if self.scroll > total_lines.saturating_sub(visible_height) {
+            self.scroll = total_lines.saturating_sub(visible_height);
+        }
+
+        for (i, (line, color)) in lines.iter().skip(self.scroll).take(visible_height).enumerate() {
+            let y = inner.y + i as u16;
+            let display_line: String = line.chars().skip(self.h_offset).take(width).collect();
+            buf.set_string(inner.x, y, &display_line, Style::new().fg(*color));
+        }
+
+        // Render scrollbar
+        if total_lines > visible_height {
+            let scrollbar = Scrollbar::new(total_lines, visible_height, self.scroll);
+            let scrollbar_area = Rect::new(inner.x + inner.width - 1, inner.y, 1, inner.height);
+            scrollbar.render(scrollbar_area, buf, Style::new().fg(theme.border));
         }
     }
 

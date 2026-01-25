@@ -19,7 +19,7 @@ mod worktree;
 
 pub use actions::ActionsView;
 pub use blame::BlameView;
-pub use branches::{BranchesView, BranchesViewMode};
+pub use branches::BranchesView;
 pub use commits::{CommitsView, CommitsViewMode};
 pub use conflict::ConflictView;
 pub use diff::{DiffMode, DiffView, PreviewType};

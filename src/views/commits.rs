@@ -71,8 +71,18 @@ impl CommitsView {
     /// Get color for a single ref
     fn get_single_ref_color(&self, ref_name: &str, theme: &Theme) -> crate::tui::Color {
         // Current branch (green)
+        // Handle "local -> remote" format by extracting the local part
         if let Some(ref current) = self.current_branch {
-            if ref_name == current || ref_name == format!("HEAD -> {}", current) {
+            // Check direct match
+            if ref_name == current {
+                return theme.branch_current;
+            }
+            // Check "HEAD -> branch" format
+            if ref_name == format!("HEAD -> {}", current) {
+                return theme.branch_current;
+            }
+            // Check "branch -> origin/branch" format (local -> remote tracking)
+            if ref_name.starts_with(current) && ref_name.contains(" -> ") {
                 return theme.branch_current;
             }
         }
@@ -770,7 +780,8 @@ impl CommitsView {
                         current_pos += separator.len();
                     }
 
-                    // Render local part (blue)
+                    // Render local part with proper color (green for current branch)
+                    let local_color = self.get_single_ref_color(local_part, theme);
                     let local_len = local_part.chars().count();
                     let local_end = current_pos + local_len;
                     if local_end > visible_start && current_pos < visible_start + width as usize {
@@ -784,7 +795,7 @@ impl CommitsView {
                             let available = (width as usize).saturating_sub(screen_x);
                             let part: String = local_part.chars().skip(skip).take(available).collect();
                             if !part.is_empty() {
-                                buf.set_string(x + screen_x as u16, y, &part, Style::new().fg(theme.branch_local));
+                                buf.set_string(x + screen_x as u16, y, &part, Style::new().fg(local_color));
                             }
                         }
                     }
@@ -1336,7 +1347,8 @@ impl CommitsView {
                         current_ref_pos += separator.len();
                     }
 
-                    // Render local part (blue)
+                    // Render local part with proper color (green for current branch)
+                    let local_color = self.get_single_ref_color(local_part, theme);
                     let local_len = local_part.chars().count();
                     let local_end = current_ref_pos + local_len;
                     if local_end > visible_start && current_ref_pos < visible_start + width as usize {
@@ -1350,7 +1362,7 @@ impl CommitsView {
                             let available = (width as usize).saturating_sub(screen_x);
                             let part: String = local_part.chars().skip(skip).take(available).collect();
                             if !part.is_empty() {
-                                buf.set_string(x + screen_x as u16, y, &part, Style::new().fg(theme.branch_local));
+                                buf.set_string(x + screen_x as u16, y, &part, Style::new().fg(local_color));
                             }
                         }
                     }

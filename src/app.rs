@@ -41,6 +41,8 @@ pub enum AsyncLoadResult {
     GitSubmodules(std::result::Result<Vec<SubmoduleInfo>, String>),
     GitConflicts(std::result::Result<Vec<ConflictEntry>, String>),
     GitFileTree(std::result::Result<Vec<FileTreeEntry>, String>),
+    // Remote operation results (fetch/pull/push)
+    RemoteOperationComplete(std::result::Result<String, String>),
 }
 
 // Re-export PanelType as Panel for backwards compatibility within app
@@ -166,6 +168,18 @@ pub struct App {
     refreshing_filetree: bool,
     /// PR number currently being loaded for commits (None if not loading)
     refreshing_pr_commits: Option<u32>,
+    /// Remote operation in progress (fetch/pull/push) - shows spinner in footer
+    remote_operation: Option<RemoteOperation>,
+    /// Spinner frame for remote operations (0-7)
+    remote_spinner_frame: usize,
+}
+
+/// Remote operation type for spinner display
+#[derive(Debug, Clone)]
+pub enum RemoteOperation {
+    Fetch(String),  // branch name
+    Pull(String),   // branch name
+    Push(String),   // branch name
 }
 
 #[derive(Debug, Clone)]
@@ -208,8 +222,7 @@ impl App {
             DefaultCommitsMode::Graph => commits_view.set_view_mode(CommitsViewMode::Graph),
         }
 
-        let mut branches_view = BranchesView::new();
-        branches_view.set_mode(config.view_defaults.branches_mode.into());
+        let branches_view = BranchesView::new();
 
         // Create channel for async loading
         let (async_sender, async_receiver) = mpsc::channel();
@@ -267,6 +280,8 @@ impl App {
             refreshing_conflicts: false,
             refreshing_filetree: false,
             refreshing_pr_commits: None,
+            remote_operation: None,
+            remote_spinner_frame: 0,
         })
     }
 
@@ -370,8 +385,6 @@ impl App {
                 }
                 AsyncLoadResult::GitBranches(Ok(branches)) => {
                     self.branches_view.update_preserve_scroll(branches);
-                    // Build branch graph for graph view mode
-                    self.branches_view.update_graph(|a, b| self.repo.is_branch_ancestor(a, b));
                     self.refreshing_branches = false;
                 }
                 AsyncLoadResult::GitBranches(Err(_)) => {
@@ -433,6 +446,16 @@ impl App {
                 AsyncLoadResult::GitFileTree(Err(_)) => {
                     self.refreshing_filetree = false;
                 }
+                AsyncLoadResult::RemoteOperationComplete(Ok(msg)) => {
+                    self.remote_operation = None;
+                    self.message = Some(msg);
+                    // Refresh all data after remote operation
+                    let _ = self.refresh_all();
+                }
+                AsyncLoadResult::RemoteOperationComplete(Err(e)) => {
+                    self.remote_operation = None;
+                    self.message = Some(format!("Error: {}", e));
+                }
             }
         }
     }
@@ -459,6 +482,10 @@ impl App {
             }
             if self.releases_view.is_loading() {
                 self.releases_view.tick_spinner();
+            }
+            // Tick remote operation spinner
+            if self.remote_operation.is_some() {
+                self.remote_spinner_frame = (self.remote_spinner_frame + 1) % 8;
             }
         }
     }
@@ -804,8 +831,6 @@ impl App {
     fn refresh_branches(&mut self) -> Result<()> {
         let branches = self.repo.branches(self.branches_view.show_remote)?;
         self.branches_view.update(branches);
-        // Build branch graph for graph view mode
-        self.branches_view.update_graph(|a, b| self.repo.is_branch_ancestor(a, b));
         Ok(())
     }
 
@@ -884,6 +909,14 @@ impl App {
         self.terminal.force_full_redraw();
     }
 
+    fn refresh_commit_preview(&mut self) {
+        if let Some(commit) = self.commits_view.selected_commit() {
+            self.diff_view.set_commit_preview(commit);
+        } else {
+            self.diff_view.clear_commit_preview();
+        }
+    }
+
     /// Start async loading of PR commits
     fn start_async_pr_commits_load(&mut self, pr_number: u32) {
         // Clear previous highlights while loading
@@ -904,6 +937,89 @@ impl App {
         self.commits_view.clear_highlight_commits();
         self.commits_view.set_highlight_branch(None);
         self.actions_view.set_highlight_branch(None);
+    }
+
+    /// Start async fetch operation with spinner
+    fn start_async_fetch(&mut self, remote: String, branch: String) {
+        if self.remote_operation.is_some() {
+            self.message = Some("Remote operation already in progress".to_string());
+            return;
+        }
+        self.remote_operation = Some(RemoteOperation::Fetch(branch.clone()));
+        self.remote_spinner_frame = 0;
+
+        let sender = self.async_sender.clone();
+        let repo_path = self.repo_path.clone();
+
+        thread::spawn(move || {
+            let result = crate::git::Repository::open(&repo_path)
+                .and_then(|repo| repo.fetch_branch(&remote, &branch))
+                .map(|()| format!("Fetched {}/{}", remote, branch))
+                .map_err(|e| e.to_string());
+            let _ = sender.send(AsyncLoadResult::RemoteOperationComplete(result));
+        });
+    }
+
+    /// Start async pull operation with spinner
+    fn start_async_pull(&mut self, remote: String, branch: String) {
+        if self.remote_operation.is_some() {
+            self.message = Some("Remote operation already in progress".to_string());
+            return;
+        }
+        self.remote_operation = Some(RemoteOperation::Pull(branch.clone()));
+        self.remote_spinner_frame = 0;
+
+        let sender = self.async_sender.clone();
+        let repo_path = self.repo_path.clone();
+
+        thread::spawn(move || {
+            let result = crate::git::Repository::open(&repo_path)
+                .and_then(|repo| repo.pull_branch(&remote, &branch))
+                .map(|merge_result| {
+                    match merge_result {
+                        crate::git::MergeResult::UpToDate => format!("Branch {} is up to date", branch),
+                        crate::git::MergeResult::FastForward => format!("Fast-forwarded branch: {}", branch),
+                        crate::git::MergeResult::Merged => format!("Merged branch: {}", branch),
+                        crate::git::MergeResult::Conflict => format!("Merge conflicts in branch: {}", branch),
+                    }
+                })
+                .map_err(|e| e.to_string());
+            let _ = sender.send(AsyncLoadResult::RemoteOperationComplete(result));
+        });
+    }
+
+    /// Start async push operation with spinner
+    fn start_async_push(&mut self, remote: String, branch: Option<String>) {
+        if self.remote_operation.is_some() {
+            self.message = Some("Remote operation already in progress".to_string());
+            return;
+        }
+        let display_name = branch.clone().unwrap_or_else(|| "HEAD".to_string());
+        self.remote_operation = Some(RemoteOperation::Push(display_name.clone()));
+        self.remote_spinner_frame = 0;
+
+        let sender = self.async_sender.clone();
+        let repo_path = self.repo_path.clone();
+
+        thread::spawn(move || {
+            let result = crate::git::Repository::open(&repo_path)
+                .and_then(|repo| {
+                    if let Some(ref b) = branch {
+                        repo.push_branch(&remote, b)
+                    } else {
+                        repo.push(&remote)
+                    }
+                })
+                .map(|()| {
+                    if let Some(b) = branch {
+                        format!("Pushed {} to {}", b, remote)
+                    } else {
+                        format!("Pushed to {}", remote)
+                    }
+                })
+                .map_err(|e| e.to_string());
+            let _ = sender.send(AsyncLoadResult::RemoteOperationComplete(result));
+        });
     }
 
     fn draw(&mut self) -> Result<()> {
@@ -1158,6 +1274,25 @@ impl App {
                 self.select_index,
             );
 
+            // Remote operation spinner in footer (right-aligned, above logo)
+            if let Some(ref op) = self.remote_operation {
+                const SPINNER_CHARS: [char; 8] = ['⣾', '⣽', '⣻', '⢿', '⡿', '⣟', '⣯', '⣷'];
+                let spinner = SPINNER_CHARS[self.remote_spinner_frame];
+                let op_text = match op {
+                    RemoteOperation::Fetch(branch) => format!("{} Fetching {}...", spinner, branch),
+                    RemoteOperation::Pull(branch) => format!("{} Pulling {}...", spinner, branch),
+                    RemoteOperation::Push(branch) => format!("{} Pushing {}...", spinner, branch),
+                };
+                let spinner_x = footer.x + 1;
+                let spinner_y = footer.y;  // Top line of footer (message line)
+                buf.set_string(
+                    spinner_x,
+                    spinner_y,
+                    &op_text,
+                    Style::new().fg(theme.branch_local).bold(),
+                );
+            }
+
             // Logo at bottom right
             let logo = "g v0.1.0";
             let logo_x = buf.area.width.saturating_sub(logo.len() as u16 + 1);
@@ -1312,10 +1447,12 @@ impl App {
                     PanelType::Branches => &[
                         ("c", "create from"),
                         ("v", "view local/remote"),
-                        ("f", "fetch branch"),
-                        ("p", "pull branch"),
-                        ("d", "delete (merged)"),
+                        ("f", "fetch"),
+                        ("p", "pull"),
+                        ("P", "push"),
+                        ("d", "delete"),
                         ("D", "force delete"),
+                        ("M", "delete merged"),
                         ("R", "reset/revert"),
                     ],
                     PanelType::Commits => &[
@@ -1813,15 +1950,7 @@ impl App {
             ConfirmAction::Push => {
                 let remotes = self.repo.remotes()?;
                 if let Some(remote) = remotes.first() {
-                    match self.repo.push(remote) {
-                        Ok(()) => {
-                            self.message = Some(format!("Pushed to {}", remote));
-                            self.refresh_branches()?;
-                        }
-                        Err(e) => {
-                            self.message = Some(format!("Push failed: {}", e));
-                        }
-                    }
+                    self.start_async_push(remote.clone(), None);
                 } else {
                     self.message = Some("No remote configured".to_string());
                 }
@@ -1830,15 +1959,7 @@ impl App {
                 if let Some(ref branch_name) = self.confirm_target {
                     let remotes = self.repo.remotes()?;
                     if let Some(remote) = remotes.first() {
-                        match self.repo.push_branch(remote, branch_name) {
-                            Ok(()) => {
-                                self.message = Some(format!("Pushed {} to {}", branch_name, remote));
-                                self.refresh_branches()?;
-                            }
-                            Err(e) => {
-                                self.message = Some(format!("Push failed: {}", e));
-                            }
-                        }
+                        self.start_async_push(remote.clone(), Some(branch_name.clone()));
                     } else {
                         self.message = Some("No remote configured".to_string());
                     }
@@ -2408,6 +2529,10 @@ impl App {
                 self.clear_pr_highlights();
                 let _ = self.refresh_file_preview();
             }
+            PanelType::Commits => {
+                self.clear_pr_highlights();
+                self.refresh_commit_preview();
+            }
             _ => {
                 // Clear PR preview and highlights for other panels
                 self.clear_pr_highlights();
@@ -2544,7 +2669,10 @@ impl App {
                 self.refresh_diff()?;
             }
             PanelType::Branches => self.branches_view.select_at_row(row),
-            PanelType::Commits => self.commits_view.select_at_row(row),
+            PanelType::Commits => {
+                self.commits_view.select_at_row(row);
+                self.refresh_commit_preview();
+            }
             PanelType::Stash => self.stash_view.select_at_row(row),
             PanelType::Diff => self.diff_view.select_at_row(row),
             PanelType::Tags => self.tags_view.select_at_row(row),
@@ -2572,7 +2700,10 @@ impl App {
                 self.refresh_diff()?;
             }
             PanelType::Branches => self.branches_view.move_up(),
-            PanelType::Commits => self.commits_view.move_up(),
+            PanelType::Commits => {
+                self.commits_view.move_up();
+                self.refresh_commit_preview();
+            }
             PanelType::Stash => self.stash_view.move_up(),
             PanelType::Diff => self.diff_view.scroll_up(),
             PanelType::Tags => self.tags_view.move_up(),
@@ -2603,7 +2734,10 @@ impl App {
                 self.refresh_diff()?;
             }
             PanelType::Branches => self.branches_view.move_down(),
-            PanelType::Commits => self.commits_view.move_down(),
+            PanelType::Commits => {
+                self.commits_view.move_down();
+                self.refresh_commit_preview();
+            }
             PanelType::Stash => self.stash_view.move_down(),
             PanelType::Diff => self.diff_view.scroll_down(),
             PanelType::Tags => self.tags_view.move_down(),
@@ -2694,6 +2828,7 @@ impl App {
                     }
                     PanelType::Commits => {
                         self.commits_view.next_search_result();
+                        self.refresh_commit_preview();
                         self.commits_view.search_results.len()
                     }
                     PanelType::Stash => {
@@ -2751,6 +2886,7 @@ impl App {
                     }
                     PanelType::Commits => {
                         self.commits_view.prev_search_result();
+                        self.refresh_commit_preview();
                         self.commits_view.search_results.len()
                     }
                     PanelType::Stash => {
@@ -2884,11 +3020,6 @@ impl App {
                 self.refresh_branches()?;
             }
 
-            // Toggle branches view mode (list/graph)
-            KeyCode::Char('t') if self.focused_panel == PanelType::Branches => {
-                self.branches_view.toggle_mode();
-            }
-
             // Branch delete (safe - only merged branches)
             KeyCode::Char('d') if self.focused_panel == PanelType::Branches => {
                 if let Some(branch) = self.branches_view.selected_branch() {
@@ -2951,15 +3082,7 @@ impl App {
                     let branch_name = branch.name.clone();
                     let remotes = self.repo.remotes()?;
                     if let Some(remote) = remotes.first() {
-                        match self.repo.fetch_branch(remote, &branch_name) {
-                            Ok(_) => {
-                                self.refresh_branches()?;
-                                self.message = Some(format!("Fetched branch: {}", branch_name));
-                            }
-                            Err(e) => {
-                                self.message = Some(format!("Fetch failed: {}", e));
-                            }
-                        }
+                        self.start_async_fetch(remote.clone(), branch_name);
                     } else {
                         self.message = Some("No remote configured".to_string());
                     }
@@ -2975,17 +3098,9 @@ impl App {
                         // For remote branches, fetch instead of pull
                         // Parse remote/branch from name like "origin/main"
                         if let Some(slash_pos) = branch_name.find('/') {
-                            let remote_name = &branch_name[..slash_pos];
-                            let ref_name = &branch_name[slash_pos + 1..];
-                            match self.repo.fetch_branch(remote_name, ref_name) {
-                                Ok(()) => {
-                                    self.refresh_all()?;
-                                    self.message = Some(format!("Fetched {}/{}", remote_name, ref_name));
-                                }
-                                Err(e) => {
-                                    self.message = Some(format!("Fetch failed: {}", e));
-                                }
-                            }
+                            let remote_name = branch_name[..slash_pos].to_string();
+                            let ref_name = branch_name[slash_pos + 1..].to_string();
+                            self.start_async_fetch(remote_name, ref_name);
                         } else {
                             self.message = Some("Invalid remote branch name".to_string());
                         }
@@ -2993,29 +3108,7 @@ impl App {
                         // For local branches, pull
                         let remotes = self.repo.remotes()?;
                         if let Some(remote) = remotes.first() {
-                            match self.repo.pull_branch(remote, &branch_name) {
-                                Ok(result) => {
-                                    self.refresh_all()?;
-                                    let msg = match result {
-                                        crate::git::MergeResult::UpToDate => {
-                                            format!("Branch {} is up to date", branch_name)
-                                        }
-                                        crate::git::MergeResult::FastForward => {
-                                            format!("Fast-forwarded branch: {}", branch_name)
-                                        }
-                                        crate::git::MergeResult::Merged => {
-                                            format!("Merged branch: {}", branch_name)
-                                        }
-                                        crate::git::MergeResult::Conflict => {
-                                            format!("Merge conflicts in branch: {}", branch_name)
-                                        }
-                                    };
-                                    self.message = Some(msg);
-                                }
-                                Err(e) => {
-                                    self.message = Some(format!("Pull failed: {}", e));
-                                }
-                            }
+                            self.start_async_pull(remote.clone(), branch_name);
                         } else {
                             self.message = Some("No remote configured".to_string());
                         }
@@ -3398,7 +3491,10 @@ impl App {
                 self.refresh_diff()?;
             }
             PanelType::Branches => self.branches_view.move_up(),
-            PanelType::Commits => self.commits_view.move_up(),
+            PanelType::Commits => {
+                self.commits_view.move_up();
+                self.refresh_commit_preview();
+            }
             PanelType::Stash => self.stash_view.move_up(),
             PanelType::Diff => self.diff_view.cursor_up(),
             PanelType::Tags => self.tags_view.move_up(),
@@ -3429,7 +3525,10 @@ impl App {
                 self.refresh_diff()?;
             }
             PanelType::Branches => self.branches_view.move_down(),
-            PanelType::Commits => self.commits_view.move_down(),
+            PanelType::Commits => {
+                self.commits_view.move_down();
+                self.refresh_commit_preview();
+            }
             PanelType::Stash => self.stash_view.move_down(),
             PanelType::Diff => {
                 let (_, height) = self.terminal.size().unwrap_or((80, 24));
@@ -3461,7 +3560,10 @@ impl App {
         match self.focused_panel {
             PanelType::Status => self.status_view.move_to_top(),
             PanelType::Branches => self.branches_view.move_to_top(),
-            PanelType::Commits => self.commits_view.move_to_top(),
+            PanelType::Commits => {
+                self.commits_view.move_to_top();
+                self.refresh_commit_preview();
+            }
             PanelType::Stash => self.stash_view.move_to_top(),
             PanelType::Diff => self.diff_view.cursor_to_top(),
             PanelType::Tags => self.tags_view.move_to_top(),
@@ -3485,7 +3587,10 @@ impl App {
         match self.focused_panel {
             PanelType::Status => self.status_view.move_to_bottom(),
             PanelType::Branches => self.branches_view.move_to_bottom(),
-            PanelType::Commits => self.commits_view.move_to_bottom(),
+            PanelType::Commits => {
+                self.commits_view.move_to_bottom();
+                self.refresh_commit_preview();
+            }
             PanelType::Stash => self.stash_view.move_to_bottom(),
             PanelType::Diff => {
                 let (_, height) = self.terminal.size().unwrap_or((80, 24));

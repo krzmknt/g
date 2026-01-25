@@ -115,128 +115,122 @@ impl BranchGraph {
     }
 
     fn build_graph_prefixes(entries: &mut [BranchGraphEntry]) {
-        // Sort entries by tree order (parents before children, depth-first)
         let n = entries.len();
-        let mut visited = vec![false; n];
-        let mut order: Vec<usize> = Vec::new();
-
-        fn visit(
-            entries: &[BranchGraphEntry],
-            idx: usize,
-            visited: &mut [bool],
-            order: &mut Vec<usize>,
-        ) {
-            if visited[idx] {
-                return;
-            }
-            visited[idx] = true;
-            order.push(idx);
-            for &child_idx in &entries[idx].children {
-                visit(entries, child_idx, visited, order);
-            }
+        if n == 0 {
+            return;
         }
 
-        // Visit roots first
-        for i in 0..n {
-            if entries[i].parent.is_none() {
-                visit(entries, i, &mut visited, &mut order);
-            }
-        }
+        // Sort by commit time (most recent first)
+        let mut display_order: Vec<usize> = (0..n).collect();
+        display_order.sort_by(|&a, &b| {
+            entries[b].branch.last_commit.time.cmp(&entries[a].branch.last_commit.time)
+        });
 
-        // Visit any remaining (disconnected branches)
-        for i in 0..n {
-            if !visited[i] {
-                visit(entries, i, &mut visited, &mut order);
-            }
-        }
-
-        // Build prefixes based on depth and tree structure
-        for &idx in &order {
-            let depth = entries[idx].depth;
-            let has_children = !entries[idx].children.is_empty();
-
-            let mut prefix = String::new();
-            for d in 0..depth {
-                if d == depth - 1 {
-                    // Check if this is the last child of its parent
-                    if let Some(parent_idx) = entries[idx].parent {
-                        let is_last = entries[parent_idx]
-                            .children
-                            .last()
-                            .map(|&last| last == idx)
-                            .unwrap_or(false);
-                        if is_last {
-                            prefix.push_str("└─");
-                        } else {
-                            prefix.push_str("├─");
-                        }
+        // Column assignment strategy:
+        // - Process in display order (most recent first)
+        // - Each branch tries to reuse its parent's column (FF relationship)
+        // - If parent doesn't have a column yet, create one and share it with parent
+        // - If parent already has a column taken by another child (diverged), create new column
+        
+        let mut branch_column: Vec<Option<usize>> = vec![None; n];
+        let mut next_column: usize = 0;
+        // Track which branch currently "owns" each column
+        let mut column_owner: Vec<Option<usize>> = Vec::new();
+        
+        for &branch_idx in &display_order {
+            let parent_idx = entries[branch_idx].parent;
+            
+            let my_col: usize;
+            
+            if let Some(p_idx) = parent_idx {
+                if let Some(parent_col) = branch_column[p_idx] {
+                    // Parent already has a column
+                    // Check if parent still owns it (no other child took it)
+                    if column_owner.get(parent_col) == Some(&Some(p_idx)) {
+                        // Take over parent's column (FF from parent)
+                        my_col = parent_col;
                     } else {
-                        prefix.push_str("  ");
+                        // Another sibling took the column - we diverge, need new column
+                        my_col = next_column;
+                        next_column += 1;
                     }
                 } else {
-                    // Check if there's a sibling at this depth level that continues
-                    prefix.push_str("│ ");
+                    // Parent doesn't have a column yet
+                    // Create a column and share with parent (FF relationship)
+                    my_col = next_column;
+                    next_column += 1;
+                    branch_column[p_idx] = Some(my_col);
                 }
-            }
-
-            if has_children {
-                prefix.push_str("● ");
             } else {
-                prefix.push_str("○ ");
+                // Root branch - new column
+                my_col = next_column;
+                next_column += 1;
             }
+            
+            branch_column[branch_idx] = Some(my_col);
+            
+            // Update column ownership
+            if my_col >= column_owner.len() {
+                column_owner.resize(my_col + 1, None);
+            }
+            column_owner[my_col] = Some(branch_idx);
+        }
 
-            entries[idx].graph_prefix = prefix;
+        // Build prefixes - track active columns during display
+        let max_columns = next_column;
+        if max_columns == 0 {
+            return;
+        }
+        
+        let mut active_columns: Vec<bool> = vec![false; max_columns];
+        
+        // Find last display position for each column
+        let mut column_last_pos: Vec<usize> = vec![0; max_columns];
+        for (pos, &branch_idx) in display_order.iter().enumerate() {
+            if let Some(col) = branch_column[branch_idx] {
+                column_last_pos[col] = pos;
+            }
+        }
+        
+        for (pos, &branch_idx) in display_order.iter().enumerate() {
+            let my_col = branch_column[branch_idx].unwrap_or(0);
+            
+            // Activate this column
+            active_columns[my_col] = true;
+            
+            // Build prefix
+            let mut prefix = String::new();
+            for col in 0..max_columns {
+                if col == my_col {
+                    prefix.push('*');
+                } else if active_columns[col] {
+                    prefix.push('|');
+                } else {
+                    prefix.push(' ');
+                }
+                prefix.push(' ');
+            }
+            
+            // Trim and format
+            entries[branch_idx].graph_prefix = prefix.trim_end().to_string();
+            if !entries[branch_idx].graph_prefix.is_empty() {
+                entries[branch_idx].graph_prefix.push(' ');
+            }
+            
+            // Deactivate column if this is its last branch in display order
+            if column_last_pos[my_col] == pos {
+                active_columns[my_col] = false;
+            }
         }
     }
 
-    /// Get entries sorted by tree order (for display)
+    /// Get entries sorted by commit time (most recent first) to match graph display
     pub fn sorted_entries(&self) -> Vec<&BranchGraphEntry> {
-        let n = self.entries.len();
-        let mut visited = vec![false; n];
-        let mut result: Vec<&BranchGraphEntry> = Vec::new();
-
-        fn visit<'a>(
-            entries: &'a [BranchGraphEntry],
-            idx: usize,
-            visited: &mut [bool],
-            result: &mut Vec<&'a BranchGraphEntry>,
-        ) {
-            if visited[idx] {
-                return;
-            }
-            visited[idx] = true;
-            result.push(&entries[idx]);
-
-            // Sort children by commit time (most recent first)
-            let mut children: Vec<usize> = entries[idx].children.clone();
-            children.sort_by(|&a, &b| {
-                entries[b].branch.last_commit.time.cmp(&entries[a].branch.last_commit.time)
-            });
-
-            for child_idx in children {
-                visit(entries, child_idx, visited, result);
-            }
-        }
-
-        // Sort roots by commit time (most recent first)
-        let mut roots: Vec<usize> = (0..n)
-            .filter(|&i| self.entries[i].parent.is_none())
-            .collect();
-        roots.sort_by(|&a, &b| {
+        let mut order: Vec<usize> = (0..self.entries.len()).collect();
+        order.sort_by(|&a, &b| {
             self.entries[b].branch.last_commit.time.cmp(&self.entries[a].branch.last_commit.time)
         });
-
-        for root_idx in roots {
-            visit(&self.entries, root_idx, &mut visited, &mut result);
-        }
-
-        // Add any remaining entries
-        for i in 0..n {
-            if !visited[i] {
-                visit(&self.entries, i, &mut visited, &mut result);
-            }
-        }
-
-        result
+        
+        order.iter().map(|&idx| &self.entries[idx]).collect()
     }
 }

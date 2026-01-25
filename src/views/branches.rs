@@ -1,22 +1,7 @@
-use crate::config::{DefaultBranchesMode, Theme};
-use crate::git::{BranchGraph, BranchInfo, BranchType};
+use crate::config::Theme;
+use crate::git::{BranchInfo, BranchType};
 use crate::tui::{Buffer, Color, Rect, Style};
 use crate::widgets::{Block, Borders, Scrollbar, Widget};
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum BranchesViewMode {
-    List,
-    Graph,
-}
-
-impl From<DefaultBranchesMode> for BranchesViewMode {
-    fn from(mode: DefaultBranchesMode) -> Self {
-        match mode {
-            DefaultBranchesMode::List => BranchesViewMode::List,
-            DefaultBranchesMode::Graph => BranchesViewMode::Graph,
-        }
-    }
-}
 
 pub struct BranchesView {
     pub local: Vec<BranchInfo>,
@@ -29,9 +14,6 @@ pub struct BranchesView {
     pub view_width: usize,
     pub search_query: Option<String>,
     pub search_results: Vec<usize>,
-    pub mode: BranchesViewMode,
-    /// Branch graph for graph mode (only local branches)
-    branch_graph: Option<BranchGraph>,
 }
 
 impl BranchesView {
@@ -47,20 +29,7 @@ impl BranchesView {
             view_width: 0,
             search_query: None,
             search_results: Vec::new(),
-            mode: BranchesViewMode::Graph,
-            branch_graph: None,
         }
-    }
-
-    pub fn set_mode(&mut self, mode: BranchesViewMode) {
-        self.mode = mode;
-    }
-
-    pub fn toggle_mode(&mut self) {
-        self.mode = match self.mode {
-            BranchesViewMode::List => BranchesViewMode::Graph,
-            BranchesViewMode::Graph => BranchesViewMode::List,
-        };
     }
 
     pub fn can_scroll_left(&self) -> bool {
@@ -99,15 +68,13 @@ impl BranchesView {
         self.local.clear();
         self.remote.clear();
 
+        // Branches are already sorted by commit time (most recent first) in repository.rs
         for branch in branches {
             match branch.branch_type {
                 BranchType::Local => self.local.push(branch),
                 BranchType::Remote => self.remote.push(branch),
             }
         }
-
-        // Clear branch graph - it will be rebuilt when needed
-        self.branch_graph = None;
 
         if reset_scroll {
             // Select current branch
@@ -120,7 +87,7 @@ impl BranchesView {
         } else {
             // Preserve scroll position, clamp to valid range
             let section_len = if old_show_remote {
-                self.remote.len()
+                self.local.len() + self.remote.len()
             } else {
                 self.local.len()
             };
@@ -130,15 +97,6 @@ impl BranchesView {
                 self.selected = 0;
             }
         }
-    }
-
-    /// Update the branch graph using the provided ancestor checking function
-    pub fn update_graph<F>(&mut self, is_ancestor: F)
-    where
-        F: Fn(&BranchInfo, &BranchInfo) -> bool,
-    {
-        let branches = self.local.clone();
-        self.branch_graph = Some(BranchGraph::build(branches, is_ancestor));
     }
 
     pub fn toggle_remote(&mut self) {
@@ -155,48 +113,15 @@ impl BranchesView {
 
     /// Get the count of visible items
     fn visible_items_count(&self) -> usize {
-        match self.mode {
-            BranchesViewMode::List => {
-                let mut count = self.local.len();
-                if self.show_remote {
-                    count += self.remote.len();
-                }
-                count
-            }
-            BranchesViewMode::Graph => {
-                let mut count = if let Some(ref graph) = self.branch_graph {
-                    graph.entries.len()
-                } else {
-                    self.local.len()
-                };
-                if self.show_remote {
-                    count += self.remote.len();
-                }
-                count
-            }
+        let mut count = self.local.len();
+        if self.show_remote {
+            count += self.remote.len();
         }
+        count
     }
 
     pub fn selected_branch(&self) -> Option<&BranchInfo> {
-        match self.mode {
-            BranchesViewMode::List => self.visible_branches().get(self.selected).copied(),
-            BranchesViewMode::Graph => {
-                if let Some(ref graph) = self.branch_graph {
-                    let sorted = graph.sorted_entries();
-                    if self.selected < sorted.len() {
-                        Some(&sorted[self.selected].branch)
-                    } else if self.show_remote {
-                        // Remote branches after graph entries
-                        let remote_idx = self.selected - sorted.len();
-                        self.remote.get(remote_idx)
-                    } else {
-                        None
-                    }
-                } else {
-                    self.visible_branches().get(self.selected).copied()
-                }
-            }
-        }
+        self.visible_branches().get(self.selected).copied()
     }
 
     pub fn move_up(&mut self) {
@@ -237,52 +162,16 @@ impl BranchesView {
 
         let query_lower = query.to_lowercase();
 
-        // Collect matching indices
-        match self.mode {
-            BranchesViewMode::List => {
-                for (i, branch) in self.local.iter().enumerate() {
-                    if branch.name.to_lowercase().contains(&query_lower) {
-                        self.search_results.push(i);
-                    }
-                }
-                if self.show_remote {
-                    let offset = self.local.len();
-                    for (i, branch) in self.remote.iter().enumerate() {
-                        if branch.name.to_lowercase().contains(&query_lower) {
-                            self.search_results.push(offset + i);
-                        }
-                    }
-                }
+        for (i, branch) in self.local.iter().enumerate() {
+            if branch.name.to_lowercase().contains(&query_lower) {
+                self.search_results.push(i);
             }
-            BranchesViewMode::Graph => {
-                if let Some(ref graph) = self.branch_graph {
-                    for (i, entry) in graph.sorted_entries().iter().enumerate() {
-                        if entry.branch.name.to_lowercase().contains(&query_lower) {
-                            self.search_results.push(i);
-                        }
-                    }
-                    if self.show_remote {
-                        let offset = graph.sorted_entries().len();
-                        for (i, branch) in self.remote.iter().enumerate() {
-                            if branch.name.to_lowercase().contains(&query_lower) {
-                                self.search_results.push(offset + i);
-                            }
-                        }
-                    }
-                } else {
-                    for (i, branch) in self.local.iter().enumerate() {
-                        if branch.name.to_lowercase().contains(&query_lower) {
-                            self.search_results.push(i);
-                        }
-                    }
-                    if self.show_remote {
-                        let offset = self.local.len();
-                        for (i, branch) in self.remote.iter().enumerate() {
-                            if branch.name.to_lowercase().contains(&query_lower) {
-                                self.search_results.push(offset + i);
-                            }
-                        }
-                    }
+        }
+        if self.show_remote {
+            let offset = self.local.len();
+            for (i, branch) in self.remote.iter().enumerate() {
+                if branch.name.to_lowercase().contains(&query_lower) {
+                    self.search_results.push(offset + i);
                 }
             }
         }
@@ -331,14 +220,9 @@ impl BranchesView {
             theme.border_unfocused
         };
 
-        let mode_indicator = match self.mode {
-            BranchesViewMode::List => "[List]",
-            BranchesViewMode::Graph => "[Graph]",
-        };
-
         let detail_indicator = if self.show_remote { " +Remotes" } else { "" };
 
-        let title = format!(" Branches {}{} ", mode_indicator, detail_indicator);
+        let title = format!(" Branches{} ", detail_indicator);
         let block = Block::new()
             .title(&title)
             .borders(Borders::ALL)
@@ -412,15 +296,15 @@ impl BranchesView {
             } else {
                 item.line.clone()
             };
-            
+
             // Apply horizontal scroll
             let main_line_len = item.line.chars().count();
-            
+
             if self.h_offset >= full_line.chars().count() {
                 // Entire line is scrolled out of view
                 continue;
             }
-            
+
             if self.h_offset >= main_line_len {
                 // Main line is scrolled out, only upstream info visible
                 if let Some((ref upstream, upstream_color)) = item.upstream_info {
@@ -439,7 +323,7 @@ impl BranchesView {
                 // Main line is at least partially visible
                 let display_main: String = item.line.chars().skip(self.h_offset).collect();
                 buf.set_string_truncated(inner.x, y, &display_main, content_width, style);
-                
+
                 // Render upstream info if present and there's space
                 if let Some((ref upstream, upstream_color)) = item.upstream_info {
                     let main_display_len = display_main.chars().count().min(content_width as usize);
@@ -453,10 +337,10 @@ impl BranchesView {
                             Style::new().fg(upstream_color)
                         };
                         buf.set_string_truncated(
-                            inner.x + main_display_len as u16, 
-                            y, 
-                            upstream, 
-                            remaining_width as u16, 
+                            inner.x + main_display_len as u16,
+                            y,
+                            upstream,
+                            remaining_width as u16,
                             upstream_style
                         );
                     }
@@ -473,49 +357,28 @@ impl BranchesView {
     /// Build display items for rendering - collects all needed data upfront
     fn build_display_items(&self, theme: &Theme) -> Vec<DisplayItem> {
         let mut items = Vec::new();
-        
+
         // show_remote acts as "detailed view" toggle:
         // - When false: Only local branches, no upstream info
         // - When true (detailed): Local branches with upstream info + untracked remote branches
         let show_upstream = self.show_remote;
-        
+
         // Collect tracked remote branch names to filter them out (only needed in detailed view)
         let tracked_remotes: std::collections::HashSet<&str> = self.local
             .iter()
             .filter_map(|b| b.upstream.as_ref().map(|u| u.name.as_str()))
             .collect();
 
-        match self.mode {
-            BranchesViewMode::List => {
-                for branch in &self.local {
-                    items.push(self.branch_to_display_item(branch, "", theme, show_upstream));
-                }
-                if self.show_remote {
-                    for branch in &self.remote {
-                        // Skip remote branches that are tracked by local branches
-                        if !tracked_remotes.contains(branch.name.as_str()) {
-                            items.push(self.branch_to_display_item(branch, "", theme, false));
-                        }
-                    }
-                }
-            }
-            BranchesViewMode::Graph => {
-                if let Some(ref graph) = self.branch_graph {
-                    for entry in graph.sorted_entries() {
-                        items.push(self.branch_to_display_item(&entry.branch, &entry.graph_prefix, theme, show_upstream));
-                    }
-                } else {
-                    for branch in &self.local {
-                        items.push(self.branch_to_display_item(branch, "", theme, show_upstream));
-                    }
-                }
-                if self.show_remote {
-                    for branch in &self.remote {
-                        // Skip remote branches that are tracked by local branches
-                        if !tracked_remotes.contains(branch.name.as_str()) {
-                            items.push(self.branch_to_display_item(branch, "", theme, false));
-                        }
-                    }
+        // Branches are already sorted by commit time (most recent first) in repository.rs
+        // This matches the order of commits in the commits graph view
+        for branch in &self.local {
+            items.push(self.branch_to_display_item(branch, theme, show_upstream));
+        }
+        if self.show_remote {
+            for branch in &self.remote {
+                // Skip remote branches that are tracked by local branches
+                if !tracked_remotes.contains(branch.name.as_str()) {
+                    items.push(self.branch_to_display_item(branch, theme, false));
                 }
             }
         }
@@ -523,26 +386,18 @@ impl BranchesView {
         items
     }
 
-    fn branch_to_display_item(&self, branch: &BranchInfo, prefix: &str, theme: &Theme, show_upstream: bool) -> DisplayItem {
-        let indicator = if branch.is_head { "*" } else { " " };
-
+    fn branch_to_display_item(&self, branch: &BranchInfo, theme: &Theme, show_upstream: bool) -> DisplayItem {
         let color = match branch.branch_type {
             BranchType::Local if branch.is_head => theme.branch_current,
             BranchType::Local => theme.branch_local,
             BranchType::Remote => theme.branch_remote,
         };
 
-        let mut line = if prefix.is_empty() {
-            format!(
-                "{} {} {}",
-                indicator, branch.last_commit.short_id, branch.name
-            )
-        } else {
-            format!(
-                "{}{} {} {}",
-                prefix, indicator, branch.last_commit.short_id, branch.name
-            )
-        };
+        let indicator = if branch.is_head { "*" } else { " " };
+        let mut line = format!(
+            "{} {} {}",
+            indicator, branch.last_commit.short_id, branch.name
+        );
 
         // Add ahead/behind info
         if branch.ahead > 0 || branch.behind > 0 {

@@ -167,6 +167,9 @@ impl Repository {
             }
         }
 
+        // Sort branches by commit time (most recent first) to match graph view order
+        branches.sort_by(|a, b| b.last_commit.time.cmp(&a.last_commit.time));
+
         Ok(branches)
     }
 
