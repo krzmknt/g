@@ -622,9 +622,9 @@ impl CommitsView {
             // Mark indicator
             let mark_prefix = if is_marked { "● " } else { "" };
 
-            // Build refs with [] and categorize by type
+            // Build refs with [] and show local -> remote tracking
             let refs_str = if !commit.refs.is_empty() {
-                format!("[{}] ", commit.refs.join(", "))
+                format!("[{}] ", Self::format_refs(&commit.refs))
             } else {
                 String::new()
             };
@@ -851,6 +851,75 @@ impl CommitsView {
         theme.branch_local
     }
 
+    /// Format refs to show local -> remote tracking relationship
+    /// e.g., [feature/A, origin/feature/A] becomes [feature/A -> origin/feature/A]
+    fn format_refs(refs: &[String]) -> String {
+        if refs.is_empty() {
+            return String::new();
+        }
+
+        // Separate local branches, remote branches, and other refs (tags, HEAD)
+        let mut local_branches: Vec<&str> = Vec::new();
+        let mut remote_branches: Vec<&str> = Vec::new();
+        let mut other_refs: Vec<&str> = Vec::new();
+
+        for r in refs {
+            let r = r.as_str();
+            if r.starts_with("HEAD -> ") {
+                // HEAD -> main, keep as is but extract the branch name
+                other_refs.push(r);
+            } else if r == "HEAD" {
+                other_refs.push(r);
+            } else if r.starts_with("tag: ") {
+                other_refs.push(r);
+            } else if r.starts_with("origin/") || r.starts_with("upstream/") || r.contains('/') {
+                // Remote tracking branch
+                remote_branches.push(r);
+            } else {
+                // Local branch
+                local_branches.push(r);
+            }
+        }
+
+        let mut result: Vec<String> = Vec::new();
+
+        // Add other refs first (HEAD, tags)
+        for r in &other_refs {
+            result.push(r.to_string());
+        }
+
+        // Match local branches with their remote tracking branches
+        let mut used_remotes: std::collections::HashSet<&str> = std::collections::HashSet::new();
+
+        for local in &local_branches {
+            // Look for matching remote: origin/<local> or upstream/<local>
+            let origin_match = format!("origin/{}", local);
+            let upstream_match = format!("upstream/{}", local);
+
+            let matching_remote = remote_branches.iter().find(|&&r| {
+                r == origin_match || r == upstream_match
+            });
+
+            if let Some(&remote) = matching_remote {
+                // Found a matching remote, display as "local -> remote"
+                result.push(format!("{} -> {}", local, remote));
+                used_remotes.insert(remote);
+            } else {
+                // No matching remote, just display the local branch
+                result.push(local.to_string());
+            }
+        }
+
+        // Add remaining remote branches that weren't matched
+        for remote in &remote_branches {
+            if !used_remotes.contains(remote) {
+                result.push(remote.to_string());
+            }
+        }
+
+        result.join(", ")
+    }
+
     fn render_graph(
         &self,
         inner: Rect,
@@ -943,9 +1012,9 @@ impl CommitsView {
                     // Mark indicator
                     let mark_prefix = if is_marked { "● " } else { "" };
 
-                    // Build refs with [] and categorize by type
+                    // Build refs with [] and show local -> remote tracking
                     let refs_str = if !commit.refs.is_empty() {
-                        format!(" [{}]", commit.refs.join(", "))
+                        format!(" [{}]", Self::format_refs(&commit.refs))
                     } else {
                         String::new()
                     };
