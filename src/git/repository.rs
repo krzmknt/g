@@ -1,18 +1,18 @@
-use std::path::{Path, PathBuf};
-use git2::{Repository as Git2Repository, Signature};
-use crate::error::{Error, Result};
-use super::branch::{BranchInfo, BranchType};
+use super::blame::{BlameInfo, BlameLine};
+use super::branch::{BranchInfo, BranchType, UpstreamInfo};
 use super::commit::CommitInfo;
-use super::status::{StatusEntry, FileStatus};
-use super::diff::{DiffInfo, FileDiff, Hunk, DiffLine, LineType};
+use super::conflict::{ConflictEntry, ConflictType};
+use super::diff::{DiffInfo, DiffLine, FileDiff, Hunk, LineType};
+use super::filetree::{FileTreeEntry, FileTreeStatus};
+use super::loggraph::{GraphCommit, GraphLine};
 use super::stash::StashEntry;
+use super::status::{FileStatus, StatusEntry};
+use super::submodule::SubmoduleInfo;
 use super::tag::TagInfo;
 use super::worktree::WorktreeInfo;
-use super::submodule::SubmoduleInfo;
-use super::blame::{BlameInfo, BlameLine};
-use super::filetree::{FileTreeEntry, FileTreeStatus};
-use super::conflict::{ConflictEntry, ConflictType};
-use super::loggraph::GraphCommit;
+use crate::error::{Error, Result};
+use git2::{Repository as Git2Repository, Signature};
+use std::path::{Path, PathBuf};
 
 pub struct Repository {
     repo: Git2Repository,
@@ -22,17 +22,13 @@ pub struct Repository {
 impl Repository {
     pub fn discover() -> Result<Self> {
         let repo = Git2Repository::discover(".")?;
-        let path = repo.workdir()
-            .unwrap_or_else(|| repo.path())
-            .to_path_buf();
+        let path = repo.workdir().unwrap_or_else(|| repo.path()).to_path_buf();
         Ok(Self { repo, path })
     }
 
     pub fn open<P: AsRef<Path>>(path: P) -> Result<Self> {
         let repo = Git2Repository::open(path.as_ref())?;
-        let path = repo.workdir()
-            .unwrap_or_else(|| repo.path())
-            .to_path_buf();
+        let path = repo.workdir().unwrap_or_else(|| repo.path()).to_path_buf();
         Ok(Self { repo, path })
     }
 
@@ -84,7 +80,9 @@ impl Repository {
             None => return Ok((0, 0)),
         };
 
-        let local = self.repo.find_branch(branch_name, git2::BranchType::Local)?;
+        let local = self
+            .repo
+            .find_branch(branch_name, git2::BranchType::Local)?;
         let upstream = match local.upstream() {
             Ok(u) => u,
             Err(_) => return Ok((0, 0)),
@@ -111,13 +109,21 @@ impl Repository {
             let last_commit = CommitInfo::from_commit(&commit);
 
             // Get upstream tracking info
-            let (ahead, behind) = match branch.upstream() {
-                Ok(upstream) => {
+            let (ahead, behind, upstream) = match branch.upstream() {
+                Ok(upstream_branch) => {
                     let local_oid = branch.get().target().unwrap();
-                    let upstream_oid = upstream.get().target().unwrap();
-                    self.repo.graph_ahead_behind(local_oid, upstream_oid).unwrap_or((0, 0))
+                    let upstream_oid = upstream_branch.get().target().unwrap();
+                    let (a, b) = self.repo
+                        .graph_ahead_behind(local_oid, upstream_oid)
+                        .unwrap_or((0, 0));
+                    let upstream_name = upstream_branch.name().ok().flatten().unwrap_or("").to_string();
+                    let upstream_short_id = upstream_oid.to_string()[..7].to_string();
+                    (a, b, Some(UpstreamInfo {
+                        name: upstream_name,
+                        short_id: upstream_short_id,
+                    }))
                 }
-                Err(_) => (0, 0),
+                Err(_) => (0, 0, None),
             };
 
             branches.push(BranchInfo {
@@ -127,6 +133,7 @@ impl Repository {
                 last_commit,
                 ahead,
                 behind,
+                upstream,
             });
         }
 
@@ -136,7 +143,12 @@ impl Repository {
                 let (branch, _) = branch_result?;
                 let name = branch.name()?.unwrap_or("").to_string();
 
-                // Skip symbolic refs like origin/HEAD that may not resolve
+                // Skip symbolic refs like origin/HEAD
+                if name.ends_with("/HEAD") {
+                    continue;
+                }
+
+                // Skip refs that may not resolve to a commit
                 let commit = match branch.get().peel_to_commit() {
                     Ok(c) => c,
                     Err(_) => continue,
@@ -150,11 +162,28 @@ impl Repository {
                     last_commit,
                     ahead: 0,
                     behind: 0,
+                    upstream: None,
                 });
             }
         }
 
         Ok(branches)
+    }
+
+    /// Check if all commits of branch_a are reachable from branch_b
+    /// (i.e., branch_a's tip is an ancestor of branch_b's tip)
+    pub fn is_branch_ancestor(&self, branch_a: &BranchInfo, branch_b: &BranchInfo) -> bool {
+        let oid_a = match git2::Oid::from_str(&branch_a.last_commit.id) {
+            Ok(oid) => oid,
+            Err(_) => return false,
+        };
+        let oid_b = match git2::Oid::from_str(&branch_b.last_commit.id) {
+            Ok(oid) => oid,
+            Err(_) => return false,
+        };
+
+        // Check if oid_a is an ancestor of oid_b
+        self.repo.graph_descendant_of(oid_b, oid_a).unwrap_or(false)
     }
 
     pub fn create_branch(&self, name: &str, target: Option<&str>) -> Result<()> {
@@ -163,9 +192,7 @@ impl Repository {
                 let obj = self.repo.revparse_single(ref_name)?;
                 obj.peel_to_commit()?
             }
-            None => {
-                self.repo.head()?.peel_to_commit()?
-            }
+            None => self.repo.head()?.peel_to_commit()?,
         };
 
         self.repo.branch(name, &commit, false)?;
@@ -176,7 +203,9 @@ impl Repository {
         let mut branch = self.repo.find_branch(name, git2::BranchType::Local)?;
 
         if branch.is_head() {
-            return Err(Error::Git(git2::Error::from_str("Cannot delete current branch")));
+            return Err(Error::Git(git2::Error::from_str(
+                "Cannot delete current branch",
+            )));
         }
 
         // Check if branch is merged into HEAD
@@ -185,13 +214,15 @@ impl Repository {
             let head_commit = self.repo.head()?.peel_to_commit()?;
 
             // Check if branch commit is ancestor of HEAD (i.e., merged)
-            let is_merged = self.repo.merge_base(branch_commit.id(), head_commit.id())
+            let is_merged = self
+                .repo
+                .merge_base(branch_commit.id(), head_commit.id())
                 .map(|base| base == branch_commit.id())
                 .unwrap_or(false);
 
             if !is_merged {
                 return Err(Error::Git(git2::Error::from_str(
-                    "Branch not fully merged. Use D to force delete."
+                    "Branch not fully merged. Use D to force delete.",
                 )));
             }
         }
@@ -200,12 +231,149 @@ impl Repository {
         Ok(())
     }
 
-    pub fn switch_branch(&self, name: &str) -> Result<()> {
-        let refname = format!("refs/heads/{}", name);
-        let obj = self.repo.revparse_single(&refname)?;
+    /// Delete a remote branch using git push --delete
+    /// If the branch doesn't exist on the remote, delete the local remote-tracking reference
+    pub fn delete_remote_branch(&self, remote_name: &str, branch_name: &str) -> Result<()> {
+        // First, try to delete from the remote server
+        let output = std::process::Command::new("git")
+            .args(["push", "--delete", remote_name, branch_name])
+            .current_dir(&self.path)
+            .output()
+            .map_err(|e| Error::Io(e))?;
 
-        self.repo.checkout_tree(&obj, None)?;
-        self.repo.set_head(&refname)?;
+        if output.status.success() {
+            return Ok(());
+        }
+
+        // If push --delete failed, try to delete the local remote-tracking reference
+        // This handles the case where the branch was already deleted on the remote
+        let ref_name = format!("refs/remotes/{}/{}", remote_name, branch_name);
+        let output = std::process::Command::new("git")
+            .args(["update-ref", "-d", &ref_name])
+            .current_dir(&self.path)
+            .output()
+            .map_err(|e| Error::Io(e))?;
+
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            return Err(Error::Git(git2::Error::from_str(&stderr)));
+        }
+        Ok(())
+    }
+
+    /// Get all branches that are fully merged into the current HEAD
+    pub fn merged_branches(&self) -> Result<(Vec<String>, Vec<String>)> {
+        let head_commit = self.repo.head()?.peel_to_commit()?;
+        let head_oid = head_commit.id();
+        let current_branch = self.head_name()?.unwrap_or_default();
+
+        let mut local_merged = Vec::new();
+        let mut remote_merged = Vec::new();
+
+        // Check local branches
+        for branch_result in self.repo.branches(Some(git2::BranchType::Local))? {
+            let (branch, _) = branch_result?;
+            let name = branch.name()?.unwrap_or("").to_string();
+
+            // Skip the current branch
+            if name == current_branch || branch.is_head() {
+                continue;
+            }
+
+            // Check if the branch commit is an ancestor of HEAD (i.e., merged)
+            if let Ok(branch_commit) = branch.get().peel_to_commit() {
+                let is_merged = self
+                    .repo
+                    .merge_base(branch_commit.id(), head_oid)
+                    .map(|base| base == branch_commit.id())
+                    .unwrap_or(false);
+
+                if is_merged {
+                    local_merged.push(name);
+                }
+            }
+        }
+
+        // Check remote branches
+        for branch_result in self.repo.branches(Some(git2::BranchType::Remote))? {
+            let (branch, _) = branch_result?;
+            let name = branch.name()?.unwrap_or("").to_string();
+
+            // Skip HEAD refs like origin/HEAD
+            if name.ends_with("/HEAD") {
+                continue;
+            }
+
+            // Skip the remote tracking branch for the current branch
+            // e.g., if current is 'main', skip 'origin/main'
+            if let Some(remote_branch) = name.split('/').last() {
+                if remote_branch == current_branch {
+                    continue;
+                }
+            }
+
+            // Check if the branch commit is an ancestor of HEAD (i.e., merged)
+            if let Ok(branch_commit) = branch.get().peel_to_commit() {
+                let is_merged = self
+                    .repo
+                    .merge_base(branch_commit.id(), head_oid)
+                    .map(|base| base == branch_commit.id())
+                    .unwrap_or(false);
+
+                if is_merged {
+                    remote_merged.push(name);
+                }
+            }
+        }
+
+        Ok((local_merged, remote_merged))
+    }
+
+    pub fn switch_branch(&self, name: &str, branch_type: BranchType) -> Result<()> {
+        match branch_type {
+            BranchType::Local => {
+                // Local branch - switch directly
+                let refname = format!("refs/heads/{}", name);
+                let obj = self.repo.revparse_single(&refname)?;
+                self.repo.checkout_tree(&obj, None)?;
+                self.repo.set_head(&refname)?;
+            }
+            BranchType::Remote => {
+                // Remote branch (e.g., "origin/feature-branch")
+                // Extract local branch name from remote ref (strip remote name prefix)
+                let local_name = if let Some(slash_pos) = name.find('/') {
+                    &name[slash_pos + 1..]
+                } else {
+                    name
+                };
+
+                // Check if a local branch with that name already exists
+                if self
+                    .repo
+                    .find_branch(local_name, git2::BranchType::Local)
+                    .is_ok()
+                {
+                    // Local branch exists, switch to it
+                    let refname = format!("refs/heads/{}", local_name);
+                    let obj = self.repo.revparse_single(&refname)?;
+                    self.repo.checkout_tree(&obj, None)?;
+                    self.repo.set_head(&refname)?;
+                } else {
+                    // Create local branch from remote and switch to it
+                    // Use git checkout -b which sets up tracking automatically
+                    let output = std::process::Command::new("git")
+                        .args(["checkout", "-b", local_name, name])
+                        .current_dir(&self.path)
+                        .output()
+                        .map_err(|e| Error::Io(e))?;
+
+                    if !output.status.success() {
+                        let stderr = String::from_utf8_lossy(&output.stderr);
+                        return Err(Error::Git(git2::Error::from_str(&stderr)));
+                    }
+                }
+            }
+        }
         Ok(())
     }
 
@@ -233,10 +401,29 @@ impl Repository {
         Ok(())
     }
 
+
+    /// Reset HEAD to a specific commit
+    /// reset_type: "soft" (keep staged), "mixed" (keep working dir), "hard" (discard all)
+    pub fn reset_to_commit(&self, commit_id: &str, reset_type: &str) -> Result<()> {
+        let obj = self.repo.revparse_single(commit_id)?;
+        let commit = obj.peel_to_commit()?;
+
+        let reset_type = match reset_type {
+            "soft" => git2::ResetType::Soft,
+            "mixed" => git2::ResetType::Mixed,
+            "hard" => git2::ResetType::Hard,
+            _ => git2::ResetType::Mixed,
+        };
+
+        self.repo.reset(commit.as_object(), reset_type, None)?;
+        Ok(())
+    }
+
     // Commit operations
     pub fn commits(&self, max_count: usize) -> Result<Vec<CommitInfo>> {
         // Build a map of commit ID -> refs (branches/tags)
-        let mut ref_map: std::collections::HashMap<String, Vec<String>> = std::collections::HashMap::new();
+        let mut ref_map: std::collections::HashMap<String, Vec<String>> =
+            std::collections::HashMap::new();
 
         // Collect branch refs
         if let Ok(branches) = self.repo.branches(None) {
@@ -245,7 +432,8 @@ impl Repository {
                     if let Ok(commit) = branch.get().peel_to_commit() {
                         let name = branch.name().ok().flatten().unwrap_or("").to_string();
                         if !name.is_empty() {
-                            ref_map.entry(commit.id().to_string())
+                            ref_map
+                                .entry(commit.id().to_string())
                                 .or_default()
                                 .push(name);
                         }
@@ -257,9 +445,11 @@ impl Repository {
         // Collect tag refs
         if let Ok(tags) = self.repo.tag_names(None) {
             for tag_name in tags.iter().flatten() {
-                if let Ok(reference) = self.repo.find_reference(&format!("refs/tags/{}", tag_name)) {
+                if let Ok(reference) = self.repo.find_reference(&format!("refs/tags/{}", tag_name))
+                {
                     if let Ok(commit) = reference.peel_to_commit() {
-                        ref_map.entry(commit.id().to_string())
+                        ref_map
+                            .entry(commit.id().to_string())
                             .or_default()
                             .push(format!("tag:{}", tag_name));
                     }
@@ -268,7 +458,19 @@ impl Repository {
         }
 
         let mut revwalk = self.repo.revwalk()?;
-        revwalk.push_head()?;
+
+        // Push all branches (local and remote) to include all commits
+        for branch_result in self.repo.branches(None)? {
+            if let Ok((branch, _)) = branch_result {
+                if let Some(oid) = branch.get().target() {
+                    let _ = revwalk.push(oid);
+                }
+            }
+        }
+
+        // Also push HEAD in case it's detached
+        let _ = revwalk.push_head();
+
         revwalk.set_sorting(git2::Sort::TIME)?;
 
         let mut commits = Vec::with_capacity(max_count);
@@ -367,7 +569,8 @@ impl Repository {
 
     pub fn unstage_file(&self, path: &str) -> Result<()> {
         let head = self.repo.head()?.peel_to_commit()?;
-        self.repo.reset_default(Some(&head.into_object()), &[Path::new(path)])?;
+        self.repo
+            .reset_default(Some(&head.into_object()), &[Path::new(path)])?;
         Ok(())
     }
 
@@ -380,7 +583,8 @@ impl Repository {
 
     pub fn unstage_all(&self) -> Result<()> {
         let head = self.repo.head()?.peel_to_commit()?;
-        self.repo.reset(&head.into_object(), git2::ResetType::Mixed, None)?;
+        self.repo
+            .reset(&head.into_object(), git2::ResetType::Mixed, None)?;
         Ok(())
     }
 
@@ -411,7 +615,9 @@ impl Repository {
         let mut last_hunk_start: Option<(u32, u32)> = None;
 
         diff.print(git2::DiffFormat::Patch, |delta, hunk, line| {
-            let file_path = delta.new_file().path()
+            let file_path = delta
+                .new_file()
+                .path()
                 .or_else(|| delta.old_file().path())
                 .map(|p| p.to_string_lossy().to_string())
                 .unwrap_or_default();
@@ -442,8 +648,10 @@ impl Repository {
                         }
                         let header = format!(
                             "@@ -{},{} +{},{} @@",
-                            h.old_start(), h.old_lines(),
-                            h.new_start(), h.new_lines()
+                            h.old_start(),
+                            h.old_lines(),
+                            h.new_start(),
+                            h.new_lines()
                         );
                         current_hunk = Some(Hunk {
                             header,
@@ -505,7 +713,8 @@ impl Repository {
 
     pub fn stash_save(&mut self, message: Option<&str>) -> Result<()> {
         let signature = self.repo.signature()?;
-        self.repo.stash_save(&signature, message.unwrap_or("WIP"), None)?;
+        self.repo
+            .stash_save(&signature, message.unwrap_or("WIP"), None)?;
         Ok(())
     }
 
@@ -532,7 +741,9 @@ impl Repository {
         for name in tag_names.iter().flatten() {
             let refname = format!("refs/tags/{}", name);
             if let Ok(reference) = self.repo.find_reference(&refname) {
-                let target = reference.target().map(|oid| oid.to_string()[..7].to_string());
+                let target = reference
+                    .target()
+                    .map(|oid| oid.to_string()[..7].to_string());
 
                 // Try to get annotation
                 let message = if let Ok(obj) = reference.peel(git2::ObjectType::Tag) {
@@ -564,7 +775,8 @@ impl Repository {
         match message {
             Some(msg) => {
                 let signature = self.repo.signature()?;
-                self.repo.tag(name, head.as_object(), &signature, msg, false)?;
+                self.repo
+                    .tag(name, head.as_object(), &signature, msg, false)?;
             }
             None => {
                 self.repo.tag_lightweight(name, head.as_object(), false)?;
@@ -581,7 +793,9 @@ impl Repository {
 
     // Merge operations
     pub fn merge(&self, branch_name: &str) -> Result<MergeResult> {
-        let branch = self.repo.find_branch(branch_name, git2::BranchType::Local)?;
+        let branch = self
+            .repo
+            .find_branch(branch_name, git2::BranchType::Local)?;
         let annotated = self.repo.reference_to_annotated_commit(branch.get())?;
 
         let (analysis, _) = self.repo.merge_analysis(&[&annotated])?;
@@ -616,7 +830,9 @@ impl Repository {
         let tree = self.repo.find_tree(oid)?;
 
         let head = self.repo.head()?.peel_to_commit()?;
-        let branch = self.repo.find_branch(branch_name, git2::BranchType::Local)?;
+        let branch = self
+            .repo
+            .find_branch(branch_name, git2::BranchType::Local)?;
         let branch_commit = branch.get().peel_to_commit()?;
 
         let signature = self.repo.signature()?;
@@ -638,13 +854,253 @@ impl Repository {
     // Remote operations
     pub fn remotes(&self) -> Result<Vec<String>> {
         let remotes = self.repo.remotes()?;
-        Ok(remotes.iter().filter_map(|r| r.map(|s| s.to_string())).collect())
+        Ok(remotes
+            .iter()
+            .filter_map(|r| r.map(|s| s.to_string()))
+            .collect())
+    }
+
+    /// Fetches GitHub pull requests using the gh CLI tool.
+    /// Returns an empty Vec if gh is not installed or this is not a GitHub repo.
+    pub fn pull_requests(&self) -> Result<Vec<super::PullRequestInfo>> {
+        let repo_dir = self.repo.path().parent().unwrap_or(self.repo.path());
+
+        let output = std::process::Command::new("gh")
+            .args([
+                "pr", "list",
+                "--json", "number,title,author,state,createdAt,baseRefName,headRefName,additions,deletions,isDraft",
+                "--limit", "100"
+            ])
+            .current_dir(repo_dir)
+            .output();
+
+        match output {
+            Ok(out) if out.status.success() => {
+                let json_str = String::from_utf8_lossy(&out.stdout);
+                match serde_json::from_str::<Vec<super::PullRequestInfo>>(&json_str) {
+                    Ok(prs) => Ok(prs),
+                    Err(_) => Ok(Vec::new()),
+                }
+            }
+            _ => Ok(Vec::new()), // Return empty on error (gh not installed, not a GitHub repo, etc.)
+        }
+    }
+
+    /// Fetches GitHub issues using the gh CLI tool.
+    /// Returns an empty Vec if gh is not installed or this is not a GitHub repo.
+    pub fn issues(&self) -> Result<Vec<super::IssueInfo>> {
+        let repo_dir = self.repo.path().parent().unwrap_or(self.repo.path());
+
+        let output = std::process::Command::new("gh")
+            .args([
+                "issue",
+                "list",
+                "--json",
+                "number,title,author,state,createdAt,labels,comments",
+                "--limit",
+                "100",
+            ])
+            .current_dir(repo_dir)
+            .output();
+
+        match output {
+            Ok(out) if out.status.success() => {
+                let json_str = String::from_utf8_lossy(&out.stdout);
+                match serde_json::from_str::<Vec<super::IssueInfo>>(&json_str) {
+                    Ok(issues) => Ok(issues),
+                    Err(_) => Ok(Vec::new()),
+                }
+            }
+            _ => Ok(Vec::new()),
+        }
+    }
+
+    /// Fetches GitHub Actions workflow runs using the gh CLI tool.
+    /// Returns an empty Vec if gh is not installed or this is not a GitHub repo.
+    pub fn workflow_runs(&self) -> Result<Vec<super::WorkflowRun>> {
+        let repo_dir = self.repo.path().parent().unwrap_or(self.repo.path());
+
+        let output = std::process::Command::new("gh")
+            .args([
+                "run",
+                "list",
+                "--json",
+                "name,headBranch,status,conclusion,createdAt,displayTitle,workflowName",
+                "--limit",
+                "50",
+            ])
+            .current_dir(repo_dir)
+            .output();
+
+        match output {
+            Ok(out) if out.status.success() => {
+                let json_str = String::from_utf8_lossy(&out.stdout);
+                match serde_json::from_str::<Vec<super::WorkflowRun>>(&json_str) {
+                    Ok(runs) => Ok(runs),
+                    Err(_) => Ok(Vec::new()),
+                }
+            }
+            _ => Ok(Vec::new()),
+        }
+    }
+
+    /// Fetches GitHub releases using the gh CLI tool.
+    /// Returns an empty Vec if gh is not installed or this is not a GitHub repo.
+    pub fn releases(&self) -> Result<Vec<super::ReleaseInfo>> {
+        let repo_dir = self.repo.path().parent().unwrap_or(self.repo.path());
+
+        let output = std::process::Command::new("gh")
+            .args([
+                "release",
+                "list",
+                "--json",
+                "tagName,name,publishedAt,isDraft,isPrerelease",
+                "--limit",
+                "50",
+            ])
+            .current_dir(repo_dir)
+            .output();
+
+        match output {
+            Ok(out) if out.status.success() => {
+                let json_str = String::from_utf8_lossy(&out.stdout);
+                match serde_json::from_str::<Vec<super::ReleaseInfo>>(&json_str) {
+                    Ok(releases) => Ok(releases),
+                    Err(_) => Ok(Vec::new()),
+                }
+            }
+            _ => Ok(Vec::new()),
+        }
     }
 
     pub fn fetch(&self, remote_name: &str) -> Result<()> {
-        let mut remote = self.repo.find_remote(remote_name)?;
-        remote.fetch(&[] as &[&str], None, None)?;
+        let output = std::process::Command::new("git")
+            .args(["fetch", remote_name])
+            .current_dir(&self.path)
+            .output()
+            .map_err(|e| Error::Io(e))?;
+
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            return Err(Error::Git(git2::Error::from_str(&stderr)));
+        }
         Ok(())
+    }
+
+
+    /// Push current branch to remote using git command
+    pub fn push(&self, remote_name: &str) -> Result<()> {
+        let output = std::process::Command::new("git")
+            .args(["push", remote_name])
+            .current_dir(&self.path)
+            .output()
+            .map_err(|e| Error::Io(e))?;
+
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            return Err(Error::Git(git2::Error::from_str(&stderr)));
+        }
+        Ok(())
+    }
+
+    /// Push a specific branch to remote
+    pub fn push_branch(&self, remote_name: &str, branch: &str) -> Result<()> {
+        let output = std::process::Command::new("git")
+            .args(["push", remote_name, branch])
+            .current_dir(&self.path)
+            .output()
+            .map_err(|e| Error::Io(e))?;
+
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            return Err(Error::Git(git2::Error::from_str(&stderr)));
+        }
+        Ok(())
+    }
+
+    /// Push with upstream tracking (-u flag)
+    pub fn push_set_upstream(&self, remote_name: &str, branch: &str) -> Result<()> {
+        let output = std::process::Command::new("git")
+            .args(["push", "-u", remote_name, branch])
+            .current_dir(&self.path)
+            .output()
+            .map_err(|e| Error::Io(e))?;
+
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            return Err(Error::Git(git2::Error::from_str(&stderr)));
+        }
+        Ok(())
+    }
+
+    pub fn fetch_branch(&self, remote_name: &str, branch: &str) -> Result<()> {
+        let output = std::process::Command::new("git")
+            .args(["fetch", remote_name, branch])
+            .current_dir(&self.path)
+            .output()
+            .map_err(|e| Error::Io(e))?;
+
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            return Err(Error::Git(git2::Error::from_str(&stderr)));
+        }
+        Ok(())
+    }
+
+    pub fn pull(&self, remote_name: &str) -> Result<MergeResult> {
+        let output = std::process::Command::new("git")
+            .args(["pull", remote_name])
+            .current_dir(&self.path)
+            .output()
+            .map_err(|e| Error::Io(e))?;
+
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+
+        if !output.status.success() {
+            // Check for conflict
+            if stderr.contains("CONFLICT") || stdout.contains("CONFLICT") {
+                return Ok(MergeResult::Conflict);
+            }
+            return Err(Error::Git(git2::Error::from_str(&stderr)));
+        }
+
+        // Parse output to determine result
+        if stdout.contains("Already up to date") || stdout.contains("Already up-to-date") {
+            Ok(MergeResult::UpToDate)
+        } else if stdout.contains("Fast-forward") {
+            Ok(MergeResult::FastForward)
+        } else {
+            Ok(MergeResult::Merged)
+        }
+    }
+
+    pub fn pull_branch(&self, remote_name: &str, branch: &str) -> Result<MergeResult> {
+        let output = std::process::Command::new("git")
+            .args(["pull", remote_name, branch])
+            .current_dir(&self.path)
+            .output()
+            .map_err(|e| Error::Io(e))?;
+
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+
+        if !output.status.success() {
+            // Check for conflict
+            if stderr.contains("CONFLICT") || stdout.contains("CONFLICT") {
+                return Ok(MergeResult::Conflict);
+            }
+            return Err(Error::Git(git2::Error::from_str(&stderr)));
+        }
+
+        // Parse output to determine result
+        if stdout.contains("Already up to date") || stdout.contains("Already up-to-date") {
+            Ok(MergeResult::UpToDate)
+        } else if stdout.contains("Fast-forward") {
+            Ok(MergeResult::FastForward)
+        } else {
+            Ok(MergeResult::Merged)
+        }
     }
 
     // Remote info
@@ -668,7 +1124,9 @@ impl Repository {
 
         // Main worktree
         let main_path = self.path.to_string_lossy().to_string();
-        let main_head = self.head_name()?.unwrap_or_else(|| self.head_commit_short().unwrap_or_default());
+        let main_head = self
+            .head_name()?
+            .unwrap_or_else(|| self.head_commit_short().unwrap_or_default());
         worktrees.push(WorktreeInfo {
             name: "main".to_string(),
             path: main_path,
@@ -759,13 +1217,24 @@ impl Repository {
         })
     }
 
+    // Read file content
+    pub fn read_file_content(&self, path: &str) -> Result<String> {
+        let file_path = self.path.join(path);
+        let content = std::fs::read_to_string(&file_path)?;
+        Ok(content)
+    }
+
     // File tree operations - lazy loading (one level at a time)
     pub fn file_tree(&self, show_ignored: bool) -> Result<Vec<FileTreeEntry>> {
         self.file_tree_dir("", show_ignored)
     }
 
     // Load a single directory level (for lazy loading)
-    pub fn file_tree_dir(&self, relative_path: &str, show_ignored: bool) -> Result<Vec<FileTreeEntry>> {
+    pub fn file_tree_dir(
+        &self,
+        relative_path: &str,
+        show_ignored: bool,
+    ) -> Result<Vec<FileTreeEntry>> {
         let statuses = self.status()?;
         let status_map: std::collections::HashMap<String, FileTreeStatus> = statuses
             .iter()
@@ -832,7 +1301,11 @@ impl Repository {
                     if let Ok(mut sub_read) = std::fs::read_dir(entry.path()) {
                         dir_entry.children = if sub_read.next().is_some() {
                             // Has at least one child - use placeholder
-                            vec![FileTreeEntry::new_file("...".to_string(), "".to_string(), None)]
+                            vec![FileTreeEntry::new_file(
+                                "...".to_string(),
+                                "".to_string(),
+                                None,
+                            )]
                         } else {
                             Vec::new()
                         };
@@ -850,12 +1323,10 @@ impl Repository {
         }
 
         // Sort: directories first, then files, alphabetically
-        entries.sort_by(|a, b| {
-            match (a.is_dir, b.is_dir) {
-                (true, false) => std::cmp::Ordering::Less,
-                (false, true) => std::cmp::Ordering::Greater,
-                _ => a.name.to_lowercase().cmp(&b.name.to_lowercase()),
-            }
+        entries.sort_by(|a, b| match (a.is_dir, b.is_dir) {
+            (true, false) => std::cmp::Ordering::Less,
+            (false, true) => std::cmp::Ordering::Greater,
+            _ => a.name.to_lowercase().cmp(&b.name.to_lowercase()),
         });
 
         Ok(entries)
@@ -898,6 +1369,37 @@ impl Repository {
         }
     }
 
+
+    /// Get the set of file paths changed in the given commits
+    pub fn files_changed_in_commits(&self, commit_ids: &[String]) -> Result<std::collections::HashSet<String>> {
+        let mut files = std::collections::HashSet::new();
+        
+        for commit_id in commit_ids {
+            if let Ok(obj) = self.repo.revparse_single(commit_id) {
+                if let Ok(commit) = obj.peel_to_commit() {
+                    // Compare with parent(s)
+                    let parent_tree = if commit.parent_count() > 0 {
+                        commit.parent(0).ok().and_then(|p| p.tree().ok())
+                    } else {
+                        None
+                    };
+                    
+                    if let Ok(tree) = commit.tree() {
+                        if let Ok(diff) = self.repo.diff_tree_to_tree(parent_tree.as_ref(), Some(&tree), None) {
+                            for delta in diff.deltas() {
+                                if let Some(path) = delta.new_file().path().or_else(|| delta.old_file().path()) {
+                                    files.insert(path.to_string_lossy().to_string());
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        
+        Ok(files)
+    }
+
     // Conflict operations
     pub fn conflicts(&self) -> Result<Vec<ConflictEntry>> {
         let index = self.repo.index()?;
@@ -908,7 +1410,8 @@ impl Repository {
         // Alternative: check for conflict markers in files
         for entry in index.conflicts()? {
             if let Ok(conflict) = entry {
-                let path = conflict.our
+                let path = conflict
+                    .our
                     .as_ref()
                     .or(conflict.their.as_ref())
                     .or(conflict.ancestor.as_ref())
@@ -963,12 +1466,164 @@ impl Repository {
         Ok(())
     }
 
-    // Log graph operations
-    pub fn log_graph(&self, max_count: usize) -> Result<Vec<GraphCommit>> {
+    // Log graph operations - use git command for proper graph rendering
+    pub fn log_graph(&self, max_count: usize) -> Result<Vec<GraphLine>> {
+        use std::process::Command;
+
+        // Use git log --graph for proper ASCII art
+        let output = Command::new("git")
+            .args([
+                "log",
+                "--graph",
+                "--all",
+                "--format=%H|%h|%s|%an|%at|%P|%D",
+                &format!("-{}", max_count),
+            ])
+            .current_dir(&self.path)
+            .output()?;
+
+        if !output.status.success() {
+            return self.log_graph_simple(max_count);
+        }
+
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let mut lines = Vec::new();
+
+        for line in stdout.lines() {
+            let chars: Vec<char> = line.chars().collect();
+            let mut graph_end: Option<usize> = None;
+            
+            // Find the first occurrence of 40 hex characters (commit hash)
+            for i in 0..chars.len().saturating_sub(40) {
+                let potential_hash: String = chars[i..i+40].iter().collect();
+                if potential_hash.chars().all(|c| c.is_ascii_hexdigit()) {
+                    graph_end = Some(i);
+                    break;
+                }
+            }
+
+            match graph_end {
+                None => {
+                    // This is a connector-only line (|\, |/, etc.)
+                    lines.push(GraphLine::Connector(line.to_string()));
+                }
+                Some(graph_end) => {
+                    let mut graph_chars: String = chars[..graph_end].iter().collect::<String>().trim_end().to_string();
+                    
+                    // Ensure there's a space before the commit hash when graph ends with | or similar
+                    // e.g., "* |" should stay as "* |" not "* |" -> "* | " for proper spacing
+                    if !graph_chars.is_empty() {
+                        let last_char = graph_chars.chars().last().unwrap();
+                        if last_char != '*' && last_char != ' ' {
+                            // Insert space after * if pattern is like "* |"
+                            // Find the * position and ensure space after it
+                            if let Some(star_pos) = graph_chars.rfind('*') {
+                                let after_star = &graph_chars[star_pos + 1..];
+                                if !after_star.starts_with(' ') {
+                                    // Insert space after *
+                                    let before = &graph_chars[..star_pos + 1];
+                                    let after = &graph_chars[star_pos + 1..];
+                                    graph_chars = format!("{} {}", before, after);
+                                }
+                            }
+                        }
+                    }
+                    
+                    let data_part: String = chars[graph_end..].iter().collect();
+                    
+                    let parts: Vec<&str> = data_part.split('|').collect();
+                    if parts.len() < 7 {
+                        continue;
+                    }
+
+                    let id = parts[0].to_string();
+                    let short_id = parts[1].to_string();
+                    let message = parts[2].to_string();
+                    let author = parts[3].to_string();
+                    let time: i64 = parts[4].parse().unwrap_or(0);
+                    let parents: Vec<String> = parts[5]
+                        .split_whitespace()
+                        .map(|s| s[..7.min(s.len())].to_string())
+                        .collect();
+                    let refs: Vec<String> = if parts[6].is_empty() {
+                        Vec::new()
+                    } else {
+                        parts[6]
+                            .split(", ")
+                            .map(|s| s.trim().to_string())
+                            .filter(|s| !s.is_empty())
+                            .collect()
+                    };
+
+                    lines.push(GraphLine::Commit(GraphCommit {
+                        id,
+                        short_id,
+                        message,
+                        author,
+                        time,
+                        parents,
+                        graph_chars,
+                        refs,
+                    }));
+                }
+            }
+        }
+
+        // Identify leaf commits (commits that are not parents of any other commit)
+        // and insert blank lines before them (except for the first commit)
+        let parent_ids: std::collections::HashSet<String> = lines
+            .iter()
+            .filter_map(|line| {
+                if let GraphLine::Commit(c) = line {
+                    Some(c.parents.clone())
+                } else {
+                    None
+                }
+            })
+            .flatten()
+            .collect();
+
+        let mut result = Vec::new();
+        let mut is_first_commit = true;
+        
+        for line in lines {
+            match &line {
+                GraphLine::Commit(commit) => {
+                    // Check if this is a leaf commit (not a parent of any other commit)
+                    let short_id = &commit.id[..7.min(commit.id.len())];
+                    let is_leaf = !parent_ids.contains(short_id) && !parent_ids.contains(&commit.id);
+                    
+                    // Add blank line before leaf commits (except the first commit)
+                    if is_leaf && !is_first_commit {
+                        // Create a connector line preserving | but replacing * with space
+                        let blank_graph: String = commit.graph_chars
+                            .chars()
+                            .map(|c| match c {
+                                '|' => '|',  // Keep vertical lines
+                                _ => ' ',    // Replace *, \, /, etc. with space
+                            })
+                            .collect();
+                        result.push(GraphLine::Connector(blank_graph));
+                    }
+                    
+                    result.push(line);
+                    is_first_commit = false;
+                }
+                GraphLine::Connector(_) => {
+                    result.push(line);
+                }
+            }
+        }
+
+        Ok(result)
+    }
+
+
+    // Fallback graph implementation using git2
+    fn log_graph_simple(&self, max_count: usize) -> Result<Vec<GraphLine>> {
         let mut revwalk = self.repo.revwalk()?;
         revwalk.push_head()?;
 
-        // Also push all branches for a complete graph
         for branch in self.repo.branches(None)? {
             if let Ok((branch, _)) = branch {
                 if let Some(oid) = branch.get().target() {
@@ -979,10 +1634,9 @@ impl Repository {
 
         revwalk.set_sorting(git2::Sort::TIME | git2::Sort::TOPOLOGICAL)?;
 
-        // Build ref map for labels
-        let mut ref_map: std::collections::HashMap<String, Vec<String>> = std::collections::HashMap::new();
+        let mut ref_map: std::collections::HashMap<String, Vec<String>> =
+            std::collections::HashMap::new();
 
-        // Add branches
         for branch in self.repo.branches(None)? {
             if let Ok((branch, _)) = branch {
                 if let Some(oid) = branch.get().target() {
@@ -992,12 +1646,14 @@ impl Repository {
             }
         }
 
-        // Add tags
         for tag_name in self.repo.tag_names(None)?.iter().flatten() {
             let refname = format!("refs/tags/{}", tag_name);
             if let Ok(reference) = self.repo.find_reference(&refname) {
                 if let Some(oid) = reference.target() {
-                    ref_map.entry(oid.to_string()).or_default().push(format!("tag: {}", tag_name));
+                    ref_map
+                        .entry(oid.to_string())
+                        .or_default()
+                        .push(format!("tag: {}", tag_name));
                 }
             }
         }
@@ -1008,17 +1664,16 @@ impl Repository {
         for oid in revwalk.take(max_count) {
             let oid = oid?;
             let commit = self.repo.find_commit(oid)?;
-
-            // Build graph characters
             let graph_chars = self.build_graph_line(&commit, &mut graph_state);
 
-            let parents: Vec<String> = commit.parents()
+            let parents: Vec<String> = commit
+                .parents()
                 .map(|p| p.id().to_string()[..7].to_string())
                 .collect();
 
             let refs = ref_map.get(&oid.to_string()).cloned().unwrap_or_default();
 
-            commits.push(GraphCommit {
+            commits.push(GraphLine::Commit(GraphCommit {
                 id: oid.to_string(),
                 short_id: oid.to_string()[..7].to_string(),
                 message: commit.summary().unwrap_or("").to_string(),
@@ -1027,35 +1682,61 @@ impl Repository {
                 parents,
                 graph_chars,
                 refs,
-            });
+            }));
         }
 
         Ok(commits)
     }
 
-    fn build_graph_line(&self, commit: &git2::Commit, state: &mut Vec<Option<git2::Oid>>) -> String {
+    fn build_graph_line(
+        &self,
+        commit: &git2::Commit,
+        state: &mut Vec<Option<git2::Oid>>,
+    ) -> String {
         let oid = commit.id();
         let parent_count = commit.parent_count();
 
-        // Find or add this commit to state
-        let col = state.iter().position(|s| *s == Some(oid))
-            .unwrap_or_else(|| {
-                // Find empty slot or add new
-                if let Some(pos) = state.iter().position(|s| s.is_none()) {
-                    state[pos] = Some(oid);
-                    pos
-                } else {
-                    state.push(Some(oid));
-                    state.len() - 1
-                }
-            });
+        // Find this commit in state (it might be a parent we were tracking)
+        let existing_col = state.iter().position(|s| *s == Some(oid));
+
+        // Determine column for this commit
+        let col = if let Some(c) = existing_col {
+            c
+        } else {
+            // New branch - find empty slot or add new
+            if let Some(pos) = state.iter().position(|s| s.is_none()) {
+                pos
+            } else {
+                state.push(None);
+                state.len() - 1
+            }
+        };
+
+        // Check if other columns are also pointing to this commit (merge-base)
+        let merging_cols: Vec<usize> = state
+            .iter()
+            .enumerate()
+            .filter(|(i, s)| *i != col && **s == Some(oid))
+            .map(|(i, _)| i)
+            .collect();
 
         let mut chars = String::new();
+        let state_len = state.len().max(col + 1);
 
-        // Build the line
-        for (i, slot) in state.iter().enumerate() {
+        // Ensure state has enough slots
+        while state.len() < state_len {
+            state.push(None);
+        }
+
+        // Build the commit line
+        for i in 0..state_len {
+            let slot = &state[i];
+            
             if i == col {
                 chars.push('*');
+            } else if merging_cols.contains(&i) {
+                // Branch ends here (merge-base) - just show vertical line
+                chars.push('|');
             } else if slot.is_some() {
                 chars.push('|');
             } else {
@@ -1064,21 +1745,27 @@ impl Repository {
             chars.push(' ');
         }
 
+        // Clear merging columns
+        for mc in &merging_cols {
+            state[*mc] = None;
+        }
+
         // Update state for parents
         if parent_count == 0 {
             state[col] = None;
         } else if parent_count == 1 {
             state[col] = Some(commit.parent_id(0).unwrap());
         } else {
-            // Merge commit - first parent takes this slot
+            // Merge commit
             state[col] = Some(commit.parent_id(0).unwrap());
-            // Additional parents get new slots
             for i in 1..parent_count {
                 if let Ok(parent_id) = commit.parent_id(i) {
-                    if let Some(pos) = state.iter().position(|s| s.is_none()) {
-                        state[pos] = Some(parent_id);
-                    } else {
-                        state.push(Some(parent_id));
+                    if !state.iter().any(|s| *s == Some(parent_id)) {
+                        if let Some(pos) = state.iter().position(|s| s.is_none()) {
+                            state[pos] = Some(parent_id);
+                        } else {
+                            state.push(Some(parent_id));
+                        }
                     }
                 }
             }
