@@ -899,7 +899,7 @@ impl Repository {
                 "issue",
                 "list",
                 "--json",
-                "number,title,author,state,createdAt,labels,comments",
+                "number,title,author,state,createdAt,labels,comments,body,url",
                 "--limit",
                 "100",
             ])
@@ -911,6 +911,38 @@ impl Repository {
                 let json_str = String::from_utf8_lossy(&out.stdout);
                 match serde_json::from_str::<Vec<super::IssueInfo>>(&json_str) {
                     Ok(issues) => Ok(issues),
+                    Err(_) => Ok(Vec::new()),
+                }
+            }
+            _ => Ok(Vec::new()),
+        }
+    }
+
+    /// Fetches comments for a specific GitHub issue using the gh CLI tool.
+    pub fn issue_comments(&self, issue_number: u32) -> Result<Vec<super::IssueComment>> {
+        let repo_dir = self.repo.path().parent().unwrap_or(self.repo.path());
+
+        let output = std::process::Command::new("gh")
+            .args([
+                "issue",
+                "view",
+                &issue_number.to_string(),
+                "--json",
+                "comments",
+            ])
+            .current_dir(repo_dir)
+            .output();
+
+        #[derive(serde::Deserialize)]
+        struct IssueComments {
+            comments: Vec<super::IssueComment>,
+        }
+
+        match output {
+            Ok(out) if out.status.success() => {
+                let json_str = String::from_utf8_lossy(&out.stdout);
+                match serde_json::from_str::<IssueComments>(&json_str) {
+                    Ok(data) => Ok(data.comments),
                     Err(_) => Ok(Vec::new()),
                 }
             }

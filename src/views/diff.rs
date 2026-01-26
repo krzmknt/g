@@ -71,6 +71,13 @@ pub struct CommitPreview {
 }
 
 #[derive(Debug, Clone)]
+pub struct IssueCommentPreview {
+    pub author: String,
+    pub body: String,
+    pub created_at: String,
+}
+
+#[derive(Debug, Clone)]
 pub struct IssuePreview {
     pub number: u32,
     pub title: String,
@@ -81,6 +88,7 @@ pub struct IssuePreview {
     pub body: String,
     pub url: String,
     pub created_at: String,
+    pub comment_list: Vec<IssueCommentPreview>,
 }
 
 impl From<&IssueInfo> for IssuePreview {
@@ -95,6 +103,7 @@ impl From<&IssueInfo> for IssuePreview {
             body: issue.body.clone(),
             url: issue.url.clone(),
             created_at: issue.created_at.clone(),
+            comment_list: Vec::new(),
         }
     }
 }
@@ -466,6 +475,19 @@ impl DiffView {
         self.issue_preview = None;
         if self.preview_type == PreviewType::Issue {
             self.preview_type = PreviewType::Diff;
+        }
+    }
+
+    pub fn set_issue_comments(&mut self, comments: &[crate::git::IssueComment]) {
+        if let Some(ref mut preview) = self.issue_preview {
+            preview.comment_list = comments
+                .iter()
+                .map(|c| IssueCommentPreview {
+                    author: c.author.login.clone(),
+                    body: c.body.clone(),
+                    created_at: c.created_at.clone(),
+                })
+                .collect();
         }
     }
 
@@ -1028,12 +1050,32 @@ impl DiffView {
         lines.push((String::new(), theme.foreground));
 
         // Body (may be multiline)
+        lines.push(("─── Description ───".to_string(), theme.diff_hunk));
         if issue.body.is_empty() {
             lines.push(("(No description)".to_string(), theme.untracked));
         } else {
             for line in issue.body.lines() {
                 lines.push((line.to_string(), theme.foreground));
             }
+        }
+
+        // Comments
+        if !issue.comment_list.is_empty() {
+            lines.push((String::new(), theme.foreground));
+            lines.push((format!("─── Comments ({}) ───", issue.comment_list.len()), theme.diff_hunk));
+            for comment in &issue.comment_list {
+                lines.push((String::new(), theme.foreground));
+                lines.push((
+                    format!("@{} - {}", comment.author, comment.created_at),
+                    theme.branch_current,
+                ));
+                for line in comment.body.lines() {
+                    lines.push((format!("  {}", line), theme.foreground));
+                }
+            }
+        } else if issue.comments > 0 {
+            lines.push((String::new(), theme.foreground));
+            lines.push(("Loading comments...".to_string(), theme.untracked));
         }
 
         // Render with scrolling

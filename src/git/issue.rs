@@ -6,6 +6,14 @@ pub struct IssueAuthor {
 }
 
 #[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct IssueComment {
+    pub author: IssueAuthor,
+    pub body: String,
+    pub created_at: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
 pub struct IssueLabel {
     pub name: String,
 }

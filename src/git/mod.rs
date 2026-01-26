@@ -26,7 +26,7 @@ pub use commit::CommitInfo;
 pub use conflict::{ConflictEntry, ConflictType};
 pub use diff::{DiffInfo, DiffLine, FileDiff, Hunk, LineType};
 pub use filetree::{FileTreeEntry, FileTreeStatus};
-pub use issue::IssueInfo;
+pub use issue::{IssueComment, IssueInfo};
 pub use loggraph::{GraphCommit, GraphLine};
 pub use pullrequest::PullRequestInfo;
 pub use release::ReleaseInfo;
