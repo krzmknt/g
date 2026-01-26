@@ -87,6 +87,7 @@ pub enum ConfirmAction {
     BranchForceDelete,
     RemoteBranchDelete,
     BranchPush,
+    BranchMerge,
     DeleteMergedBranches,
     Discard,
     Push,
@@ -1505,6 +1506,7 @@ impl App {
                         ("f", "fetch"),
                         ("p", "pull"),
                         ("P", "push"),
+                        ("m", "merge"),
                         ("d", "delete"),
                         ("D", "force delete"),
                         ("M", "delete merged"),
@@ -1609,6 +1611,10 @@ impl App {
                     ConfirmAction::Push => "Push to remote?".to_string(),
                     ConfirmAction::BranchPush => format!(
                         "Push branch '{}' to remote?",
+                        confirm_target.as_deref().unwrap_or("?")
+                    ),
+                    ConfirmAction::BranchMerge => format!(
+                        "Merge branch '{}' into current branch?",
                         confirm_target.as_deref().unwrap_or("?")
                     ),
                     ConfirmAction::StashDrop => format!(
@@ -2049,6 +2055,33 @@ impl App {
                         self.start_async_push(remote.clone(), Some(branch_name.clone()));
                     } else {
                         self.message = Some("No remote configured".to_string());
+                    }
+                }
+            }
+            ConfirmAction::BranchMerge => {
+                if let Some(ref branch_name) = self.confirm_target {
+                    match self.repo.merge(branch_name) {
+                        Ok(result) => {
+                            let msg = match result {
+                                crate::git::MergeResult::UpToDate => {
+                                    format!("Already up to date with '{}'", branch_name)
+                                }
+                                crate::git::MergeResult::FastForward => {
+                                    format!("Fast-forwarded to '{}'", branch_name)
+                                }
+                                crate::git::MergeResult::Merged => {
+                                    format!("Merged '{}' into current branch", branch_name)
+                                }
+                                crate::git::MergeResult::Conflict => {
+                                    format!("Merge conflicts with '{}' - resolve manually", branch_name)
+                                }
+                            };
+                            self.message = Some(msg);
+                            self.refresh_all()?;
+                        }
+                        Err(e) => {
+                            self.message = Some(format!("Merge failed: {}", e));
+                        }
                     }
                 }
             }
@@ -2925,6 +2958,18 @@ impl App {
             KeyCode::BackTab => {
                 self.focused_panel = self.prev_panel();
                 self.on_panel_focus_changed();
+            }
+
+            // Merge selected branch into current branch
+            KeyCode::Char('m') if self.focused_panel == PanelType::Branches => {
+                if let Some(branch) = self.branches_view.selected_branch() {
+                    if branch.is_head {
+                        self.message = Some("Cannot merge current branch into itself".to_string());
+                    } else {
+                        self.confirm_target = Some(branch.name.clone());
+                        self.mode = Mode::Confirm(ConfirmAction::BranchMerge);
+                    }
+                }
             }
 
             // Menu toggle
