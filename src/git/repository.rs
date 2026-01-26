@@ -918,38 +918,6 @@ impl Repository {
         }
     }
 
-    /// Fetches comments for a specific GitHub issue using the gh CLI tool.
-    pub fn issue_comments(&self, issue_number: u32) -> Result<Vec<super::IssueComment>> {
-        let repo_dir = self.repo.path().parent().unwrap_or(self.repo.path());
-
-        let output = std::process::Command::new("gh")
-            .args([
-                "issue",
-                "view",
-                &issue_number.to_string(),
-                "--json",
-                "comments",
-            ])
-            .current_dir(repo_dir)
-            .output();
-
-        #[derive(serde::Deserialize)]
-        struct IssueComments {
-            comments: Vec<super::IssueComment>,
-        }
-
-        match output {
-            Ok(out) if out.status.success() => {
-                let json_str = String::from_utf8_lossy(&out.stdout);
-                match serde_json::from_str::<IssueComments>(&json_str) {
-                    Ok(data) => Ok(data.comments),
-                    Err(_) => Ok(Vec::new()),
-                }
-            }
-            _ => Ok(Vec::new()),
-        }
-    }
-
     /// Fetches GitHub Actions workflow runs using the gh CLI tool.
     /// Returns an empty Vec if gh is not installed or this is not a GitHub repo.
     pub fn workflow_runs(&self) -> Result<Vec<super::WorkflowRun>> {

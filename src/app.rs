@@ -925,15 +925,7 @@ impl App {
 
     fn refresh_issue_preview(&mut self) {
         if let Some(issue) = self.issues_view.selected_issue() {
-            let issue_number = issue.number;
-            let has_comments = issue.comments > 0;
             self.diff_view.set_issue_preview(issue);
-            // Fetch comments if there are any
-            if has_comments {
-                if let Ok(comments) = self.repo.issue_comments(issue_number) {
-                    self.diff_view.set_issue_comments(&comments);
-                }
-            }
         } else {
             self.diff_view.clear_issue_preview();
         }

@@ -29,7 +29,7 @@ pub struct IssueInfo {
     #[serde(default)]
     pub labels: Vec<IssueLabel>,
     #[serde(default)]
-    pub comments: u32,
+    pub comments: Vec<IssueComment>,
     #[serde(default)]
     pub body: String,
     #[serde(default)]

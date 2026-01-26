@@ -84,7 +84,6 @@ pub struct IssuePreview {
     pub author: String,
     pub state: String,
     pub labels: Vec<String>,
-    pub comments: u32,
     pub body: String,
     pub url: String,
     pub created_at: String,
@@ -99,11 +98,18 @@ impl From<&IssueInfo> for IssuePreview {
             author: issue.author.login.clone(),
             state: issue.state.clone(),
             labels: issue.labels.iter().map(|l| l.name.clone()).collect(),
-            comments: issue.comments,
             body: issue.body.clone(),
             url: issue.url.clone(),
             created_at: issue.created_at.clone(),
-            comment_list: Vec::new(),
+            comment_list: issue
+                .comments
+                .iter()
+                .map(|c| IssueCommentPreview {
+                    author: c.author.login.clone(),
+                    body: c.body.clone(),
+                    created_at: c.created_at.clone(),
+                })
+                .collect(),
         }
     }
 }
@@ -475,19 +481,6 @@ impl DiffView {
         self.issue_preview = None;
         if self.preview_type == PreviewType::Issue {
             self.preview_type = PreviewType::Diff;
-        }
-    }
-
-    pub fn set_issue_comments(&mut self, comments: &[crate::git::IssueComment]) {
-        if let Some(ref mut preview) = self.issue_preview {
-            preview.comment_list = comments
-                .iter()
-                .map(|c| IssueCommentPreview {
-                    author: c.author.login.clone(),
-                    body: c.body.clone(),
-                    created_at: c.created_at.clone(),
-                })
-                .collect();
         }
     }
 
@@ -1039,7 +1032,7 @@ impl DiffView {
         }
 
         // Comments count
-        lines.push((format!("Comments: {}", issue.comments), theme.foreground));
+        lines.push((format!("Comments: {}", issue.comment_list.len()), theme.foreground));
 
         // URL
         if !issue.url.is_empty() {
@@ -1073,9 +1066,6 @@ impl DiffView {
                     lines.push((format!("  {}", line), theme.foreground));
                 }
             }
-        } else if issue.comments > 0 {
-            lines.push((String::new(), theme.foreground));
-            lines.push(("Loading comments...".to_string(), theme.untracked));
         }
 
         // Render with scrolling
