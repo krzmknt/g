@@ -918,6 +918,46 @@ impl Repository {
         }
     }
 
+    /// Fetches the detailed view of a GitHub issue using `gh issue view`.
+    /// Returns the formatted output including comments as a string.
+    pub fn issue_view(&self, issue_number: u32) -> Result<String> {
+        let repo_dir = self.repo.path().parent().unwrap_or(self.repo.path());
+        let num_str = issue_number.to_string();
+
+        // Get issue details
+        let issue_output = std::process::Command::new("gh")
+            .args(["issue", "view", &num_str])
+            .current_dir(repo_dir)
+            .output();
+
+        let issue_content = match issue_output {
+            Ok(out) if out.status.success() => {
+                String::from_utf8_lossy(&out.stdout).to_string()
+            }
+            _ => return Ok(String::new()),
+        };
+
+        // Get comments
+        let comments_output = std::process::Command::new("gh")
+            .args(["issue", "view", &num_str, "-c"])
+            .current_dir(repo_dir)
+            .output();
+
+        let comments_content = match comments_output {
+            Ok(out) if out.status.success() => {
+                let content = String::from_utf8_lossy(&out.stdout).to_string();
+                if content.trim().is_empty() {
+                    String::new()
+                } else {
+                    format!("\n─── Comments ───\n{}", content)
+                }
+            }
+            _ => String::new(),
+        };
+
+        Ok(format!("{}{}", issue_content, comments_content))
+    }
+
     /// Fetches GitHub Actions workflow runs using the gh CLI tool.
     /// Returns an empty Vec if gh is not installed or this is not a GitHub repo.
     pub fn workflow_runs(&self) -> Result<Vec<super::WorkflowRun>> {

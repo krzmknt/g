@@ -1,5 +1,5 @@
 use crate::config::Theme;
-use crate::git::{DiffInfo, FileDiff, IssueInfo, LineType, PullRequestInfo};
+use crate::git::{DiffInfo, FileDiff, LineType, PullRequestInfo};
 use crate::tui::{str_display_width, unicode_width, Buffer, Color, Rect, Style};
 use crate::widgets::{Block, Borders, Scrollbar, Widget};
 
@@ -71,47 +71,9 @@ pub struct CommitPreview {
 }
 
 #[derive(Debug, Clone)]
-pub struct IssueCommentPreview {
-    pub author: String,
-    pub body: String,
-    pub created_at: String,
-}
-
-#[derive(Debug, Clone)]
 pub struct IssuePreview {
     pub number: u32,
-    pub title: String,
-    pub author: String,
-    pub state: String,
-    pub labels: Vec<String>,
-    pub body: String,
-    pub url: String,
-    pub created_at: String,
-    pub comment_list: Vec<IssueCommentPreview>,
-}
-
-impl From<&IssueInfo> for IssuePreview {
-    fn from(issue: &IssueInfo) -> Self {
-        Self {
-            number: issue.number,
-            title: issue.title.clone(),
-            author: issue.author.login.clone(),
-            state: issue.state.clone(),
-            labels: issue.labels.iter().map(|l| l.name.clone()).collect(),
-            body: issue.body.clone(),
-            url: issue.url.clone(),
-            created_at: issue.created_at.clone(),
-            comment_list: issue
-                .comments
-                .iter()
-                .map(|c| IssueCommentPreview {
-                    author: c.author.login.clone(),
-                    body: c.body.clone(),
-                    created_at: c.created_at.clone(),
-                })
-                .collect(),
-        }
-    }
+    pub content: String,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -470,8 +432,8 @@ impl DiffView {
         }
     }
 
-    pub fn set_issue_preview(&mut self, issue: &IssueInfo) {
-        self.issue_preview = Some(IssuePreview::from(issue));
+    pub fn set_issue_preview(&mut self, number: u32, content: String) {
+        self.issue_preview = Some(IssuePreview { number, content });
         self.preview_type = PreviewType::Issue;
         self.scroll = 0;
         self.h_offset = 0;
@@ -830,9 +792,9 @@ impl DiffView {
                 }
             }
             PreviewType::Issue => {
-                // Issue preview: search in body
+                // Issue preview: search in content
                 if let Some(ref issue) = self.issue_preview {
-                    issue.body.lines().map(|s| s.to_string()).collect()
+                    issue.content.lines().map(|s| s.to_string()).collect()
                 } else {
                     Vec::new()
                 }
@@ -959,7 +921,7 @@ impl DiffView {
             }
             PreviewType::Issue => {
                 if let Some(ref issue) = self.issue_preview {
-                    format!(" Issue #{} [{}] ", issue.number, issue.state)
+                    format!(" Issue #{} ", issue.number)
                 } else {
                     " Issue ".to_string()
                 }
@@ -1009,64 +971,7 @@ impl DiffView {
         };
 
         let width = inner.width as usize;
-        let mut lines: Vec<(String, Color)> = Vec::new();
-
-        // Title
-        lines.push((format!("#{} {}", issue.number, issue.title), theme.branch_current));
-
-        // State
-        let state_color = if issue.state == "OPEN" {
-            theme.diff_add
-        } else {
-            theme.diff_remove
-        };
-        lines.push((format!("State: {}", issue.state), state_color));
-
-        // Author and date
-        lines.push((format!("Author: {}", issue.author), theme.foreground));
-        lines.push((format!("Created: {}", issue.created_at), theme.foreground));
-
-        // Labels
-        if !issue.labels.is_empty() {
-            lines.push((format!("Labels: {}", issue.labels.join(", ")), theme.diff_hunk));
-        }
-
-        // Comments count
-        lines.push((format!("Comments: {}", issue.comment_list.len()), theme.foreground));
-
-        // URL
-        if !issue.url.is_empty() {
-            lines.push((format!("URL: {}", issue.url), theme.branch_remote));
-        }
-
-        // Empty line before body
-        lines.push((String::new(), theme.foreground));
-
-        // Body (may be multiline)
-        lines.push(("─── Description ───".to_string(), theme.diff_hunk));
-        if issue.body.is_empty() {
-            lines.push(("(No description)".to_string(), theme.untracked));
-        } else {
-            for line in issue.body.lines() {
-                lines.push((line.to_string(), theme.foreground));
-            }
-        }
-
-        // Comments
-        if !issue.comment_list.is_empty() {
-            lines.push((String::new(), theme.foreground));
-            lines.push((format!("─── Comments ({}) ───", issue.comment_list.len()), theme.diff_hunk));
-            for comment in &issue.comment_list {
-                lines.push((String::new(), theme.foreground));
-                lines.push((
-                    format!("@{} - {}", comment.author, comment.created_at),
-                    theme.branch_current,
-                ));
-                for line in comment.body.lines() {
-                    lines.push((format!("  {}", line), theme.foreground));
-                }
-            }
-        }
+        let lines: Vec<&str> = issue.content.lines().collect();
 
         // Render with scrolling
         let visible_height = inner.height as usize;
@@ -1077,10 +982,10 @@ impl DiffView {
             self.scroll = total_lines.saturating_sub(visible_height);
         }
 
-        for (i, (line, color)) in lines.iter().skip(self.scroll).take(visible_height).enumerate() {
+        for (i, line) in lines.iter().skip(self.scroll).take(visible_height).enumerate() {
             let y = inner.y + i as u16;
             let display_line: String = line.chars().skip(self.h_offset).take(width).collect();
-            buf.set_string(inner.x, y, &display_line, Style::new().fg(*color));
+            buf.set_string(inner.x, y, &display_line, Style::new().fg(theme.foreground));
         }
 
         // Render scrollbar

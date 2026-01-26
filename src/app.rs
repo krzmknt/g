@@ -925,7 +925,10 @@ impl App {
 
     fn refresh_issue_preview(&mut self) {
         if let Some(issue) = self.issues_view.selected_issue() {
-            self.diff_view.set_issue_preview(issue);
+            let issue_number = issue.number;
+            if let Ok(content) = self.repo.issue_view(issue_number) {
+                self.diff_view.set_issue_preview(issue_number, content);
+            }
         } else {
             self.diff_view.clear_issue_preview();
         }
