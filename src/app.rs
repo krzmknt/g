@@ -923,6 +923,14 @@ impl App {
         }
     }
 
+    fn refresh_issue_preview(&mut self) {
+        if let Some(issue) = self.issues_view.selected_issue() {
+            self.diff_view.set_issue_preview(issue);
+        } else {
+            self.diff_view.clear_issue_preview();
+        }
+    }
+
     /// Start async loading of PR commits
     fn start_async_pr_commits_load(&mut self, pr_number: u32) {
         // Clear previous highlights while loading
@@ -2619,6 +2627,10 @@ impl App {
                 self.clear_pr_highlights();
                 self.refresh_commit_preview();
             }
+            PanelType::Issues => {
+                self.clear_pr_highlights();
+                self.refresh_issue_preview();
+            }
             _ => {
                 // Clear PR preview and highlights for other panels
                 self.clear_pr_highlights();
@@ -2771,8 +2783,14 @@ impl App {
                 self.refresh_file_preview()?;
             }
             PanelType::Conflicts => self.conflict_view.select_at_row(row),
-            PanelType::PullRequests => self.pull_requests_view.select_at_row(row),
-            PanelType::Issues => self.issues_view.select_at_row(row),
+            PanelType::PullRequests => {
+                self.pull_requests_view.select_at_row(row);
+                self.refresh_pr_preview();
+            }
+            PanelType::Issues => {
+                self.issues_view.select_at_row(row);
+                self.refresh_issue_preview();
+            }
             PanelType::Actions => self.actions_view.select_at_row(row),
             PanelType::Releases => self.releases_view.select_at_row(row),
         }
@@ -2806,7 +2824,10 @@ impl App {
                 self.pull_requests_view.move_up();
                 self.refresh_pr_preview();
             }
-            PanelType::Issues => self.issues_view.move_up(),
+            PanelType::Issues => {
+                self.issues_view.move_up();
+                self.refresh_issue_preview();
+            }
             PanelType::Actions => self.actions_view.move_up(),
             PanelType::Releases => self.releases_view.move_up(),
         }
@@ -2840,7 +2861,10 @@ impl App {
                 self.pull_requests_view.move_down();
                 self.refresh_pr_preview();
             }
-            PanelType::Issues => self.issues_view.move_down(),
+            PanelType::Issues => {
+                self.issues_view.move_down();
+                self.refresh_issue_preview();
+            }
             PanelType::Actions => self.actions_view.move_down(),
             PanelType::Releases => self.releases_view.move_down(),
         }
@@ -3612,7 +3636,10 @@ impl App {
                 self.pull_requests_view.move_up();
                 self.refresh_pr_preview();
             }
-            PanelType::Issues => self.issues_view.move_up(),
+            PanelType::Issues => {
+                self.issues_view.move_up();
+                self.refresh_issue_preview();
+            }
             PanelType::Actions => self.actions_view.move_up(),
             PanelType::Releases => self.releases_view.move_up(),
         }
@@ -3650,7 +3677,10 @@ impl App {
                 self.pull_requests_view.move_down();
                 self.refresh_pr_preview();
             }
-            PanelType::Issues => self.issues_view.move_down(),
+            PanelType::Issues => {
+                self.issues_view.move_down();
+                self.refresh_issue_preview();
+            }
             PanelType::Actions => self.actions_view.move_down(),
             PanelType::Releases => self.releases_view.move_down(),
         }
@@ -3678,7 +3708,10 @@ impl App {
                 self.pull_requests_view.move_to_top();
                 self.refresh_pr_preview();
             }
-            PanelType::Issues => self.issues_view.move_to_top(),
+            PanelType::Issues => {
+                self.issues_view.move_to_top();
+                self.refresh_issue_preview();
+            }
             PanelType::Actions => self.actions_view.move_to_top(),
             PanelType::Releases => self.releases_view.move_to_top(),
         }
@@ -3709,7 +3742,10 @@ impl App {
                 self.pull_requests_view.move_to_bottom();
                 self.refresh_pr_preview();
             }
-            PanelType::Issues => self.issues_view.move_to_bottom(),
+            PanelType::Issues => {
+                self.issues_view.move_to_bottom();
+                self.refresh_issue_preview();
+            }
             PanelType::Actions => self.actions_view.move_to_bottom(),
             PanelType::Releases => self.releases_view.move_to_bottom(),
         }

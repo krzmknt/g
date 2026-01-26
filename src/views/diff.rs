@@ -1,5 +1,5 @@
 use crate::config::Theme;
-use crate::git::{DiffInfo, FileDiff, LineType, PullRequestInfo};
+use crate::git::{DiffInfo, FileDiff, IssueInfo, LineType, PullRequestInfo};
 use crate::tui::{str_display_width, unicode_width, Buffer, Color, Rect, Style};
 use crate::widgets::{Block, Borders, Scrollbar, Widget};
 
@@ -15,6 +15,7 @@ pub enum PreviewType {
     FileContent,
     PullRequest,
     Commit,
+    Issue,
 }
 
 #[derive(Debug, Clone)]
@@ -67,6 +68,35 @@ pub struct CommitPreview {
     pub email: String,
     pub date: String,
     pub refs: Vec<String>,
+}
+
+#[derive(Debug, Clone)]
+pub struct IssuePreview {
+    pub number: u32,
+    pub title: String,
+    pub author: String,
+    pub state: String,
+    pub labels: Vec<String>,
+    pub comments: u32,
+    pub body: String,
+    pub url: String,
+    pub created_at: String,
+}
+
+impl From<&IssueInfo> for IssuePreview {
+    fn from(issue: &IssueInfo) -> Self {
+        Self {
+            number: issue.number,
+            title: issue.title.clone(),
+            author: issue.author.login.clone(),
+            state: issue.state.clone(),
+            labels: issue.labels.iter().map(|l| l.name.clone()).collect(),
+            comments: issue.comments,
+            body: issue.body.clone(),
+            url: issue.url.clone(),
+            created_at: issue.created_at.clone(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -343,6 +373,7 @@ pub struct DiffView {
     pub file_content: Option<FileContent>,
     pub pr_preview: Option<PullRequestPreview>,
     pub commit_preview: Option<CommitPreview>,
+    pub issue_preview: Option<IssuePreview>,
     // Visual mode (line selection)
     pub visual_mode: bool,
     pub visual_start: usize, // Starting line of selection
@@ -368,6 +399,7 @@ impl DiffView {
             file_content: None,
             pr_preview: None,
             commit_preview: None,
+            issue_preview: None,
             visual_mode: false,
             visual_start: 0,
             cursor_line: 0,
@@ -419,6 +451,20 @@ impl DiffView {
     pub fn clear_pr_preview(&mut self) {
         self.pr_preview = None;
         if self.preview_type == PreviewType::PullRequest {
+            self.preview_type = PreviewType::Diff;
+        }
+    }
+
+    pub fn set_issue_preview(&mut self, issue: &IssueInfo) {
+        self.issue_preview = Some(IssuePreview::from(issue));
+        self.preview_type = PreviewType::Issue;
+        self.scroll = 0;
+        self.h_offset = 0;
+    }
+
+    pub fn clear_issue_preview(&mut self) {
+        self.issue_preview = None;
+        if self.preview_type == PreviewType::Issue {
             self.preview_type = PreviewType::Diff;
         }
     }
@@ -675,6 +721,10 @@ impl DiffView {
                 // Commit preview doesn't support text selection
                 None
             }
+            PreviewType::Issue => {
+                // Issue preview doesn't support text selection
+                None
+            }
         }
     }
 
@@ -704,6 +754,10 @@ impl DiffView {
             }
             PreviewType::Commit => {
                 // Commit preview line count not tracked for visual mode
+                0
+            }
+            PreviewType::Issue => {
+                // Issue preview line count not tracked for visual mode
                 0
             }
         }
@@ -756,6 +810,14 @@ impl DiffView {
                 // Commit preview: search in message
                 if let Some(ref commit) = self.commit_preview {
                     commit.message.lines().map(|s| s.to_string()).collect()
+                } else {
+                    Vec::new()
+                }
+            }
+            PreviewType::Issue => {
+                // Issue preview: search in body
+                if let Some(ref issue) = self.issue_preview {
+                    issue.body.lines().map(|s| s.to_string()).collect()
                 } else {
                     Vec::new()
                 }
@@ -880,6 +942,13 @@ impl DiffView {
                     " Commit ".to_string()
                 }
             }
+            PreviewType::Issue => {
+                if let Some(ref issue) = self.issue_preview {
+                    format!(" Issue #{} [{}] ", issue.number, issue.state)
+                } else {
+                    " Issue ".to_string()
+                }
+            }
         };
 
         let block = Block::new()
@@ -911,6 +980,82 @@ impl DiffView {
             },
             PreviewType::PullRequest => self.render_pr_preview(inner, buf, theme),
             PreviewType::Commit => self.render_commit_preview(inner, buf, theme),
+            PreviewType::Issue => self.render_issue_preview(inner, buf, theme),
+        }
+    }
+
+    fn render_issue_preview(&mut self, inner: Rect, buf: &mut Buffer, theme: &Theme) {
+        let Some(ref issue) = self.issue_preview else {
+            let msg = "No issue selected";
+            let x = inner.x + (inner.width.saturating_sub(msg.len() as u16)) / 2;
+            let y = inner.y + inner.height / 2;
+            buf.set_string(x, y, msg, Style::new().fg(theme.untracked));
+            return;
+        };
+
+        let width = inner.width as usize;
+        let mut lines: Vec<(String, Color)> = Vec::new();
+
+        // Title
+        lines.push((format!("#{} {}", issue.number, issue.title), theme.branch_current));
+
+        // State
+        let state_color = if issue.state == "OPEN" {
+            theme.diff_add
+        } else {
+            theme.diff_remove
+        };
+        lines.push((format!("State: {}", issue.state), state_color));
+
+        // Author and date
+        lines.push((format!("Author: {}", issue.author), theme.foreground));
+        lines.push((format!("Created: {}", issue.created_at), theme.foreground));
+
+        // Labels
+        if !issue.labels.is_empty() {
+            lines.push((format!("Labels: {}", issue.labels.join(", ")), theme.diff_hunk));
+        }
+
+        // Comments count
+        lines.push((format!("Comments: {}", issue.comments), theme.foreground));
+
+        // URL
+        if !issue.url.is_empty() {
+            lines.push((format!("URL: {}", issue.url), theme.branch_remote));
+        }
+
+        // Empty line before body
+        lines.push((String::new(), theme.foreground));
+
+        // Body (may be multiline)
+        if issue.body.is_empty() {
+            lines.push(("(No description)".to_string(), theme.untracked));
+        } else {
+            for line in issue.body.lines() {
+                lines.push((line.to_string(), theme.foreground));
+            }
+        }
+
+        // Render with scrolling
+        let visible_height = inner.height as usize;
+        let total_lines = lines.len();
+
+        // Clamp scroll
+        if self.scroll > total_lines.saturating_sub(visible_height) {
+            self.scroll = total_lines.saturating_sub(visible_height);
+        }
+
+        for (i, (line, color)) in lines.iter().skip(self.scroll).take(visible_height).enumerate() {
+            let y = inner.y + i as u16;
+            let display_line: String = line.chars().skip(self.h_offset).take(width).collect();
+            buf.set_string(inner.x, y, &display_line, Style::new().fg(*color));
+        }
+
+        // Render scrollbar
+        if total_lines > visible_height {
+            let scrollbar = Scrollbar::new(total_lines, visible_height, self.scroll);
+            let scrollbar_area = Rect::new(inner.x + inner.width - 1, inner.y, 1, inner.height);
+            scrollbar.render(scrollbar_area, buf, Style::new().fg(theme.border));
         }
     }
 

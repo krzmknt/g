@@ -22,4 +22,8 @@ pub struct IssueInfo {
     pub labels: Vec<IssueLabel>,
     #[serde(default)]
     pub comments: u32,
+    #[serde(default)]
+    pub body: String,
+    #[serde(default)]
+    pub url: String,
 }
