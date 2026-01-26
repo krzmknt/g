@@ -8,4 +8,6 @@ pub struct ReleaseInfo {
     pub published_at: String,
     pub is_draft: bool,
     pub is_prerelease: bool,
+    #[serde(default)]
+    pub url: String, // Will be constructed from repo URL + tag
 }

@@ -934,6 +934,42 @@ impl App {
         }
     }
 
+    /// Open a URL in the default browser
+    fn open_url(&self, url: &str) {
+        #[cfg(target_os = "macos")]
+        {
+            let _ = std::process::Command::new("open").arg(url).spawn();
+        }
+        #[cfg(target_os = "linux")]
+        {
+            let _ = std::process::Command::new("xdg-open").arg(url).spawn();
+        }
+        #[cfg(target_os = "windows")]
+        {
+            let _ = std::process::Command::new("cmd")
+                .args(["/C", "start", "", url])
+                .spawn();
+        }
+    }
+
+    /// Get the GitHub repository URL from remote
+    fn get_github_repo_url(&self) -> Option<String> {
+        // Use gh repo view to get the URL
+        let output = std::process::Command::new("gh")
+            .args(["repo", "view", "--json", "url", "-q", ".url"])
+            .current_dir(&self.repo_path)
+            .output()
+            .ok()?;
+
+        if output.status.success() {
+            let url = String::from_utf8_lossy(&output.stdout).trim().to_string();
+            if !url.is_empty() {
+                return Some(url);
+            }
+        }
+        None
+    }
+
     /// Start async loading of PR commits
     fn start_async_pr_commits_load(&mut self, pr_number: u32) {
         // Clear previous highlights while loading
@@ -3371,6 +3407,38 @@ impl App {
                 if self.releases_view.can_retry() {
                     self.start_loading_releases();
                     self.message = Some("Loading releases...".to_string());
+                }
+            }
+
+            // Open in browser (o)
+            KeyCode::Char('o') if self.focused_panel == PanelType::PullRequests => {
+                if let Some(pr) = self.pull_requests_view.selected_pr() {
+                    if !pr.url.is_empty() {
+                        self.open_url(&pr.url);
+                    }
+                }
+            }
+            KeyCode::Char('o') if self.focused_panel == PanelType::Issues => {
+                if let Some(issue) = self.issues_view.selected_issue() {
+                    if !issue.url.is_empty() {
+                        self.open_url(&issue.url);
+                    }
+                }
+            }
+            KeyCode::Char('o') if self.focused_panel == PanelType::Actions => {
+                if let Some(run) = self.actions_view.selected_run() {
+                    if !run.url.is_empty() {
+                        self.open_url(&run.url);
+                    }
+                }
+            }
+            KeyCode::Char('o') if self.focused_panel == PanelType::Releases => {
+                if let Some(release) = self.releases_view.selected_release() {
+                    // Construct URL from repo info and tag
+                    if let Some(remote_url) = self.get_github_repo_url() {
+                        let url = format!("{}/releases/tag/{}", remote_url, release.tag_name);
+                        self.open_url(&url);
+                    }
                 }
             }
 

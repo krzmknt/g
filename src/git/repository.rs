@@ -932,7 +932,7 @@ impl Repository {
 
         let issue_content = match issue_output {
             Ok(out) if out.status.success() => {
-                String::from_utf8_lossy(&out.stdout).to_string()
+                String::from_utf8_lossy(&out.stdout).replace('\t', "  ")
             }
             _ => return Ok(String::new()),
         };
@@ -945,7 +945,7 @@ impl Repository {
 
         let comments_content = match comments_output {
             Ok(out) if out.status.success() => {
-                let content = String::from_utf8_lossy(&out.stdout).to_string();
+                let content = String::from_utf8_lossy(&out.stdout).replace('\t', "  ");
                 if content.trim().is_empty() {
                     String::new()
                 } else {
@@ -968,7 +968,7 @@ impl Repository {
                 "run",
                 "list",
                 "--json",
-                "name,headBranch,status,conclusion,createdAt,displayTitle,workflowName",
+                "name,headBranch,status,conclusion,createdAt,displayTitle,workflowName,url",
                 "--limit",
                 "50",
             ])

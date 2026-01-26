@@ -11,4 +11,6 @@ pub struct WorkflowRun {
     pub display_title: String,
     #[serde(default)]
     pub workflow_name: String,
+    #[serde(default)]
+    pub url: String,
 }
