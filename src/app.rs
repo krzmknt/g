@@ -935,6 +935,23 @@ impl App {
         }
     }
 
+    fn refresh_conflict_preview(&mut self) {
+        if let Some(conflict) = self.conflict_view.selected_conflict() {
+            let path = conflict.path.clone();
+            let conflict_type = conflict.conflict_type.to_string();
+            // Read the file content with conflict markers
+            let full_path = self.repo_path.join(&path);
+            if let Ok(content) = std::fs::read_to_string(&full_path) {
+                self.diff_view
+                    .set_conflict_preview(path, conflict_type, content);
+            } else {
+                self.diff_view.clear_conflict_preview();
+            }
+        } else {
+            self.diff_view.clear_conflict_preview();
+        }
+    }
+
     /// Open a URL in the default browser
     fn open_url(&self, url: &str) {
         #[cfg(target_os = "macos")]
@@ -2703,6 +2720,10 @@ impl App {
                 self.clear_pr_highlights();
                 self.refresh_issue_preview();
             }
+            PanelType::Conflicts => {
+                self.clear_pr_highlights();
+                self.refresh_conflict_preview();
+            }
             _ => {
                 // Clear PR preview and highlights for other panels
                 self.clear_pr_highlights();
@@ -2854,7 +2875,10 @@ impl App {
                 self.filetree_view.select_at_row(row);
                 self.refresh_file_preview()?;
             }
-            PanelType::Conflicts => self.conflict_view.select_at_row(row),
+            PanelType::Conflicts => {
+                self.conflict_view.select_at_row(row);
+                self.refresh_conflict_preview();
+            }
             PanelType::PullRequests => {
                 self.pull_requests_view.select_at_row(row);
                 self.refresh_pr_preview();
@@ -2891,7 +2915,10 @@ impl App {
                 self.filetree_view.move_up();
                 self.refresh_file_preview()?;
             }
-            PanelType::Conflicts => self.conflict_view.move_up(),
+            PanelType::Conflicts => {
+                self.conflict_view.move_up();
+                self.refresh_conflict_preview();
+            }
             PanelType::PullRequests => {
                 self.pull_requests_view.move_up();
                 self.refresh_pr_preview();
@@ -2928,7 +2955,10 @@ impl App {
                 self.filetree_view.move_down();
                 self.refresh_file_preview()?;
             }
-            PanelType::Conflicts => self.conflict_view.move_down(),
+            PanelType::Conflicts => {
+                self.conflict_view.move_down();
+                self.refresh_conflict_preview();
+            }
             PanelType::PullRequests => {
                 self.pull_requests_view.move_down();
                 self.refresh_pr_preview();
@@ -3747,7 +3777,10 @@ impl App {
                 self.filetree_view.move_up();
                 self.refresh_file_preview()?;
             }
-            PanelType::Conflicts => self.conflict_view.move_up(),
+            PanelType::Conflicts => {
+                self.conflict_view.move_up();
+                self.refresh_conflict_preview();
+            }
             PanelType::PullRequests => {
                 self.pull_requests_view.move_up();
                 self.refresh_pr_preview();
@@ -3788,7 +3821,10 @@ impl App {
                 self.filetree_view.move_down();
                 self.refresh_file_preview()?;
             }
-            PanelType::Conflicts => self.conflict_view.move_down(),
+            PanelType::Conflicts => {
+                self.conflict_view.move_down();
+                self.refresh_conflict_preview();
+            }
             PanelType::PullRequests => {
                 self.pull_requests_view.move_down();
                 self.refresh_pr_preview();
@@ -3819,7 +3855,10 @@ impl App {
             PanelType::Submodules => self.submodules_view.move_to_top(),
             PanelType::Blame => self.blame_view.move_to_top(),
             PanelType::Files => self.filetree_view.move_to_top(),
-            PanelType::Conflicts => self.conflict_view.move_to_top(),
+            PanelType::Conflicts => {
+                self.conflict_view.move_to_top();
+                self.refresh_conflict_preview();
+            }
             PanelType::PullRequests => {
                 self.pull_requests_view.move_to_top();
                 self.refresh_pr_preview();
@@ -3853,7 +3892,10 @@ impl App {
             PanelType::Submodules => self.submodules_view.move_to_bottom(),
             PanelType::Blame => self.blame_view.move_to_bottom(),
             PanelType::Files => self.filetree_view.move_to_bottom(),
-            PanelType::Conflicts => self.conflict_view.move_to_bottom(),
+            PanelType::Conflicts => {
+                self.conflict_view.move_to_bottom();
+                self.refresh_conflict_preview();
+            }
             PanelType::PullRequests => {
                 self.pull_requests_view.move_to_bottom();
                 self.refresh_pr_preview();

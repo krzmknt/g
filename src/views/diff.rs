@@ -16,6 +16,7 @@ pub enum PreviewType {
     PullRequest,
     Commit,
     Issue,
+    Conflict,
 }
 
 #[derive(Debug, Clone)]
@@ -73,6 +74,13 @@ pub struct CommitPreview {
 #[derive(Debug, Clone)]
 pub struct IssuePreview {
     pub number: u32,
+    pub content: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct ConflictPreview {
+    pub path: String,
+    pub conflict_type: String,
     pub content: String,
 }
 
@@ -351,6 +359,7 @@ pub struct DiffView {
     pub pr_preview: Option<PullRequestPreview>,
     pub commit_preview: Option<CommitPreview>,
     pub issue_preview: Option<IssuePreview>,
+    pub conflict_preview: Option<ConflictPreview>,
     // Visual mode (line selection)
     pub visual_mode: bool,
     pub visual_start: usize, // Starting line of selection
@@ -377,6 +386,7 @@ impl DiffView {
             pr_preview: None,
             commit_preview: None,
             issue_preview: None,
+            conflict_preview: None,
             visual_mode: false,
             visual_start: 0,
             cursor_line: 0,
@@ -442,6 +452,24 @@ impl DiffView {
     pub fn clear_issue_preview(&mut self) {
         self.issue_preview = None;
         if self.preview_type == PreviewType::Issue {
+            self.preview_type = PreviewType::Diff;
+        }
+    }
+
+    pub fn set_conflict_preview(&mut self, path: String, conflict_type: String, content: String) {
+        self.conflict_preview = Some(ConflictPreview {
+            path,
+            conflict_type,
+            content,
+        });
+        self.preview_type = PreviewType::Conflict;
+        self.scroll = 0;
+        self.h_offset = 0;
+    }
+
+    pub fn clear_conflict_preview(&mut self) {
+        self.conflict_preview = None;
+        if self.preview_type == PreviewType::Conflict {
             self.preview_type = PreviewType::Diff;
         }
     }
@@ -702,6 +730,10 @@ impl DiffView {
                 // Issue preview doesn't support text selection
                 None
             }
+            PreviewType::Conflict => {
+                // Conflict preview doesn't support text selection
+                None
+            }
         }
     }
 
@@ -735,6 +767,10 @@ impl DiffView {
             }
             PreviewType::Issue => {
                 // Issue preview line count not tracked for visual mode
+                0
+            }
+            PreviewType::Conflict => {
+                // Conflict preview line count not tracked for visual mode
                 0
             }
         }
@@ -795,6 +831,14 @@ impl DiffView {
                 // Issue preview: search in content
                 if let Some(ref issue) = self.issue_preview {
                     issue.content.lines().map(|s| s.to_string()).collect()
+                } else {
+                    Vec::new()
+                }
+            }
+            PreviewType::Conflict => {
+                // Conflict preview: search in content
+                if let Some(ref conflict) = self.conflict_preview {
+                    conflict.content.lines().map(|s| s.to_string()).collect()
                 } else {
                     Vec::new()
                 }
@@ -926,6 +970,13 @@ impl DiffView {
                     " Issue ".to_string()
                 }
             }
+            PreviewType::Conflict => {
+                if let Some(ref conflict) = self.conflict_preview {
+                    format!(" Conflict: {} ({}) ", conflict.path, conflict.conflict_type)
+                } else {
+                    " Conflict ".to_string()
+                }
+            }
         };
 
         let block = Block::new()
@@ -958,6 +1009,7 @@ impl DiffView {
             PreviewType::PullRequest => self.render_pr_preview(inner, buf, theme),
             PreviewType::Commit => self.render_commit_preview(inner, buf, theme),
             PreviewType::Issue => self.render_issue_preview(inner, buf, theme),
+            PreviewType::Conflict => self.render_conflict_preview(inner, buf, theme),
         }
     }
 
@@ -986,6 +1038,55 @@ impl DiffView {
             let y = inner.y + i as u16;
             let display_line: String = line.chars().skip(self.h_offset).take(width).collect();
             buf.set_string(inner.x, y, &display_line, Style::new().fg(theme.foreground));
+        }
+
+        // Render scrollbar
+        if total_lines > visible_height {
+            let scrollbar = Scrollbar::new(total_lines, visible_height, self.scroll);
+            let scrollbar_area = Rect::new(inner.x + inner.width - 1, inner.y, 1, inner.height);
+            scrollbar.render(scrollbar_area, buf, Style::new().fg(theme.border));
+        }
+    }
+
+    fn render_conflict_preview(&mut self, inner: Rect, buf: &mut Buffer, theme: &Theme) {
+        let Some(ref conflict) = self.conflict_preview else {
+            let msg = "No conflict selected";
+            let x = inner.x + (inner.width.saturating_sub(msg.len() as u16)) / 2;
+            let y = inner.y + inner.height / 2;
+            buf.set_string(x, y, msg, Style::new().fg(theme.untracked));
+            return;
+        };
+
+        let width = inner.width as usize;
+        let lines: Vec<&str> = conflict.content.lines().collect();
+
+        // Render with scrolling
+        let visible_height = inner.height as usize;
+        let total_lines = lines.len();
+
+        // Clamp scroll
+        if self.scroll > total_lines.saturating_sub(visible_height) {
+            self.scroll = total_lines.saturating_sub(visible_height);
+        }
+
+        for (i, line) in lines.iter().skip(self.scroll).take(visible_height).enumerate() {
+            let y = inner.y + i as u16;
+            let display_line: String = line.chars().skip(self.h_offset).take(width).collect();
+
+            // Color conflict markers
+            let color = if line.starts_with("<<<<<<<") {
+                theme.diff_remove
+            } else if line.starts_with("=======") {
+                theme.diff_hunk
+            } else if line.starts_with(">>>>>>>") {
+                theme.diff_add
+            } else if line.starts_with("|||||||") {
+                theme.staged
+            } else {
+                theme.foreground
+            };
+
+            buf.set_string(inner.x, y, &display_line, Style::new().fg(color));
         }
 
         // Render scrollbar
