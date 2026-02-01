@@ -17,6 +17,7 @@ pub enum PreviewType {
     Commit,
     Issue,
     Conflict,
+    Action,
 }
 
 #[derive(Debug, Clone)]
@@ -82,6 +83,13 @@ pub struct ConflictPreview {
     pub path: String,
     pub conflict_type: String,
     pub content: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct ActionPreview {
+    pub run_id: u64,
+    pub content: Option<String>,  // None = loading
+    pub spinner_frame: usize,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -360,6 +368,7 @@ pub struct DiffView {
     pub commit_preview: Option<CommitPreview>,
     pub issue_preview: Option<IssuePreview>,
     pub conflict_preview: Option<ConflictPreview>,
+    pub action_preview: Option<ActionPreview>,
     // Visual mode (line selection)
     pub visual_mode: bool,
     pub visual_start: usize, // Starting line of selection
@@ -387,6 +396,7 @@ impl DiffView {
             commit_preview: None,
             issue_preview: None,
             conflict_preview: None,
+            action_preview: None,
             visual_mode: false,
             visual_start: 0,
             cursor_line: 0,
@@ -470,6 +480,58 @@ impl DiffView {
     pub fn clear_conflict_preview(&mut self) {
         self.conflict_preview = None;
         if self.preview_type == PreviewType::Conflict {
+            self.preview_type = PreviewType::Diff;
+        }
+    }
+
+    /// Start loading action preview (shows spinner)
+    pub fn start_action_preview_loading(&mut self, run_id: u64) {
+        self.action_preview = Some(ActionPreview {
+            run_id,
+            content: None,
+            spinner_frame: 0,
+        });
+        self.preview_type = PreviewType::Action;
+        self.scroll = 0;
+        self.h_offset = 0;
+    }
+
+    /// Set loaded action preview content
+    pub fn set_action_preview(&mut self, run_id: u64, content: String) {
+        // Only update if this is the run we're waiting for
+        if let Some(ref mut preview) = self.action_preview {
+            if preview.run_id == run_id {
+                preview.content = Some(content);
+            }
+        } else {
+            self.action_preview = Some(ActionPreview {
+                run_id,
+                content: Some(content),
+                spinner_frame: 0,
+            });
+            self.preview_type = PreviewType::Action;
+        }
+        self.scroll = 0;
+        self.h_offset = 0;
+    }
+
+    /// Tick the action preview spinner
+    pub fn tick_action_spinner(&mut self) {
+        if let Some(ref mut preview) = self.action_preview {
+            if preview.content.is_none() {
+                preview.spinner_frame = (preview.spinner_frame + 1) % 8;
+            }
+        }
+    }
+
+    /// Check if action preview is loading
+    pub fn is_action_loading(&self) -> bool {
+        self.action_preview.as_ref().map(|p| p.content.is_none()).unwrap_or(false)
+    }
+
+    pub fn clear_action_preview(&mut self) {
+        self.action_preview = None;
+        if self.preview_type == PreviewType::Action {
             self.preview_type = PreviewType::Diff;
         }
     }
@@ -734,6 +796,10 @@ impl DiffView {
                 // Conflict preview doesn't support text selection
                 None
             }
+            PreviewType::Action => {
+                // Action preview doesn't support text selection
+                None
+            }
         }
     }
 
@@ -771,6 +837,10 @@ impl DiffView {
             }
             PreviewType::Conflict => {
                 // Conflict preview line count not tracked for visual mode
+                0
+            }
+            PreviewType::Action => {
+                // Action preview line count not tracked for visual mode
                 0
             }
         }
@@ -839,6 +909,18 @@ impl DiffView {
                 // Conflict preview: search in content
                 if let Some(ref conflict) = self.conflict_preview {
                     conflict.content.lines().map(|s| s.to_string()).collect()
+                } else {
+                    Vec::new()
+                }
+            }
+            PreviewType::Action => {
+                // Action preview: search in content
+                if let Some(ref action) = self.action_preview {
+                    if let Some(ref content) = action.content {
+                        content.lines().map(|s| s.to_string()).collect()
+                    } else {
+                        Vec::new()
+                    }
                 } else {
                     Vec::new()
                 }
@@ -977,6 +1059,19 @@ impl DiffView {
                     " Conflict ".to_string()
                 }
             }
+            PreviewType::Action => {
+                if let Some(ref action) = self.action_preview {
+                    if action.content.is_some() {
+                        format!(" Action Run #{} ", action.run_id)
+                    } else {
+                        const SPINNER_FRAMES: &[&str] = &["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧"];
+                        let spinner = SPINNER_FRAMES[action.spinner_frame % SPINNER_FRAMES.len()];
+                        format!(" Action Run #{} {} ", action.run_id, spinner)
+                    }
+                } else {
+                    " Action ".to_string()
+                }
+            }
         };
 
         let block = Block::new()
@@ -1010,6 +1105,7 @@ impl DiffView {
             PreviewType::Commit => self.render_commit_preview(inner, buf, theme),
             PreviewType::Issue => self.render_issue_preview(inner, buf, theme),
             PreviewType::Conflict => self.render_conflict_preview(inner, buf, theme),
+            PreviewType::Action => self.render_action_preview(inner, buf, theme),
         }
     }
 
@@ -1087,6 +1183,52 @@ impl DiffView {
             };
 
             buf.set_string(inner.x, y, &display_line, Style::new().fg(color));
+        }
+
+        // Render scrollbar
+        if total_lines > visible_height {
+            let scrollbar = Scrollbar::new(total_lines, visible_height, self.scroll);
+            let scrollbar_area = Rect::new(inner.x + inner.width - 1, inner.y, 1, inner.height);
+            scrollbar.render(scrollbar_area, buf, Style::new().fg(theme.border));
+        }
+    }
+
+    fn render_action_preview(&mut self, inner: Rect, buf: &mut Buffer, theme: &Theme) {
+        let Some(ref action) = self.action_preview else {
+            let msg = "No action run selected";
+            let x = inner.x + (inner.width.saturating_sub(msg.len() as u16)) / 2;
+            let y = inner.y + inner.height / 2;
+            buf.set_string(x, y, msg, Style::new().fg(theme.untracked));
+            return;
+        };
+
+        // Show loading spinner if content not yet loaded
+        let Some(ref content) = action.content else {
+            const SPINNER_FRAMES: &[&str] = &["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧"];
+            let spinner = SPINNER_FRAMES[action.spinner_frame % SPINNER_FRAMES.len()];
+            let msg = format!("{} Loading action run #{}...", spinner, action.run_id);
+            let x = inner.x + (inner.width.saturating_sub(msg.len() as u16)) / 2;
+            let y = inner.y + inner.height / 2;
+            buf.set_string(x, y, &msg, Style::new().fg(theme.staged));
+            return;
+        };
+
+        let width = inner.width as usize;
+        let lines: Vec<&str> = content.lines().collect();
+
+        // Render with scrolling
+        let visible_height = inner.height as usize;
+        let total_lines = lines.len();
+
+        // Clamp scroll
+        if self.scroll > total_lines.saturating_sub(visible_height) {
+            self.scroll = total_lines.saturating_sub(visible_height);
+        }
+
+        for (i, line) in lines.iter().skip(self.scroll).take(visible_height).enumerate() {
+            let y = inner.y + i as u16;
+            let display_line: String = line.chars().skip(self.h_offset).take(width).collect();
+            buf.set_string(inner.x, y, &display_line, Style::new().fg(theme.foreground));
         }
 
         // Render scrollbar

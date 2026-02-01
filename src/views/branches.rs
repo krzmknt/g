@@ -21,7 +21,7 @@ impl BranchesView {
         Self {
             local: Vec::new(),
             remote: Vec::new(),
-            show_remote: false,
+            show_remote: true,
             selected: 0,
             offset: 0,
             h_offset: 0,
@@ -106,18 +106,38 @@ impl BranchesView {
     pub fn visible_branches(&self) -> Vec<&BranchInfo> {
         let mut branches: Vec<&BranchInfo> = self.local.iter().collect();
         if self.show_remote {
-            branches.extend(self.remote.iter());
+            // Filter out remote branches that are tracked by local branches
+            // This matches the logic in build_display_items() for consistency
+            let tracked_remotes: std::collections::HashSet<&str> = self.local
+                .iter()
+                .filter_map(|b| b.upstream.as_ref().map(|u| u.name.as_str()))
+                .collect();
+
+            branches.extend(
+                self.remote.iter()
+                    .filter(|b| !tracked_remotes.contains(b.name.as_str()))
+            );
         }
         branches
     }
 
     /// Get the count of visible items
     fn visible_items_count(&self) -> usize {
-        let mut count = self.local.len();
+        let count = self.local.len();
         if self.show_remote {
-            count += self.remote.len();
+            // Filter out remote branches that are tracked by local branches
+            // This matches the logic in build_display_items() for consistency
+            let tracked_remotes: std::collections::HashSet<&str> = self.local
+                .iter()
+                .filter_map(|b| b.upstream.as_ref().map(|u| u.name.as_str()))
+                .collect();
+
+            count + self.remote.iter()
+                .filter(|b| !tracked_remotes.contains(b.name.as_str()))
+                .count()
+        } else {
+            count
         }
-        count
     }
 
     pub fn selected_branch(&self) -> Option<&BranchInfo> {

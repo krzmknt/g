@@ -106,6 +106,57 @@ These work in all panels and modes.
 | `p`     | Push tag to remote             |
 | `P`     | Push all tags                  |
 
+### Pull Requests Panel
+
+| Key     | Action                              |
+| ------- | ----------------------------------- |
+| `Enter` | Show PR details in preview pane     |
+| `M`     | Merge PR (select merge method)      |
+| `d`     | Close PR (with confirmation)        |
+| `o`     | Open PR in browser                  |
+| `R`     | Reload pull requests                |
+
+### Issues Panel
+
+| Key     | Action                              |
+| ------- | ----------------------------------- |
+| `Enter` | Show issue details in preview pane  |
+| `c`     | Add comment to issue                |
+| `d`     | Close issue (with confirmation)     |
+| `D`     | Delete issue (with confirmation)    |
+| `r`     | Reopen closed issue                 |
+| `o`     | Open issue in browser               |
+| `R`     | Reload issues                       |
+
+### Actions Panel
+
+| Key     | Action                              |
+| ------- | ----------------------------------- |
+| `Enter` | Show action run details             |
+| `o`     | Open action run in browser          |
+| `R`     | Reload actions                      |
+
+### Releases Panel
+
+| Key     | Action                              |
+| ------- | ----------------------------------- |
+| `Enter` | Show release details                |
+| `o`     | Open release in browser             |
+| `R`     | Reload releases                     |
+
+### Remotes Panel
+
+| Key     | Action                              |
+| ------- | ----------------------------------- |
+| `f`     | Fetch from selected remote          |
+
+### Conflicts Panel
+
+| Key     | Action                              |
+| ------- | ----------------------------------- |
+| `o`     | Use "ours" version                  |
+| `t`     | Use "theirs" version                |
+
 ## Dialog Keybindings
 
 ### Confirmation Dialog

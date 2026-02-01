@@ -2,8 +2,66 @@ use crate::config::Theme;
 use crate::git::WorkflowRun;
 use crate::tui::{Buffer, Rect, Style};
 use crate::widgets::{Block, Borders, Scrollbar, Widget};
+use chrono::{DateTime, Utc};
 
 use super::loading::{LoadingState, DEFAULT_TIMEOUT, SPINNER_FRAMES};
+
+/// Format a duration in a human-readable way (e.g., "2m 30s", "1h 5m")
+fn format_duration(seconds: i64) -> String {
+    if seconds < 60 {
+        format!("{}s", seconds)
+    } else if seconds < 3600 {
+        let mins = seconds / 60;
+        let secs = seconds % 60;
+        if secs > 0 {
+            format!("{}m {}s", mins, secs)
+        } else {
+            format!("{}m", mins)
+        }
+    } else {
+        let hours = seconds / 3600;
+        let mins = (seconds % 3600) / 60;
+        if mins > 0 {
+            format!("{}h {}m", hours, mins)
+        } else {
+            format!("{}h", hours)
+        }
+    }
+}
+
+/// Format age (time since) in a human-readable way (e.g., "2m ago", "3d ago")
+fn format_age(timestamp: &str) -> String {
+    if let Ok(dt) = DateTime::parse_from_rfc3339(timestamp) {
+        let now = Utc::now();
+        let duration = now.signed_duration_since(dt.with_timezone(&Utc));
+        let seconds = duration.num_seconds();
+
+        if seconds < 60 {
+            format!("{}s ago", seconds)
+        } else if seconds < 3600 {
+            format!("{}m ago", seconds / 60)
+        } else if seconds < 86400 {
+            format!("{}h ago", seconds / 3600)
+        } else {
+            format!("{}d ago", seconds / 86400)
+        }
+    } else {
+        "?".to_string()
+    }
+}
+
+/// Calculate elapsed time between two timestamps
+fn format_elapsed(started: &str, ended: &str) -> String {
+    if let (Ok(start), Ok(end)) = (
+        DateTime::parse_from_rfc3339(started),
+        DateTime::parse_from_rfc3339(ended),
+    ) {
+        let duration = end.signed_duration_since(start);
+        format_duration(duration.num_seconds())
+    } else {
+        "?".to_string()
+    }
+}
 
 pub struct ActionsView {
     pub runs: Vec<WorkflowRun>,
@@ -323,7 +381,9 @@ impl ActionsView {
                 let name_width = run.display_title.chars().count();
                 let branch_width = format!(" ({})", run.head_branch).len();
                 let workflow_width = format!(" [{}]", run.name).len();
-                status_width + name_width + branch_width + workflow_width + 2
+                let event_width = format!(" {}", run.event).len();
+                // elapsed + age roughly 20 chars max
+                status_width + name_width + branch_width + workflow_width + event_width + 25
             })
             .max()
             .unwrap_or(0)
@@ -374,9 +434,31 @@ impl ActionsView {
 
             let status_icon = self.status_icon(run);
 
+            // Calculate elapsed time (from started_at to updated_at if completed, or to now if in_progress)
+            let elapsed = if let Some(ref started) = run.started_at {
+                if run.status == "completed" {
+                    if let Some(ref updated) = run.updated_at {
+                        format_elapsed(started, updated)
+                    } else {
+                        "?".to_string()
+                    }
+                } else if run.status == "in_progress" {
+                    // For in-progress, show elapsed from start to now
+                    let now = Utc::now().to_rfc3339();
+                    format_elapsed(started, &now)
+                } else {
+                    "-".to_string()
+                }
+            } else {
+                "-".to_string()
+            };
+
+            // Calculate age (time since created)
+            let age = format_age(&run.created_at);
+
             let line = format!(
-                "{} {} ({}) [{}]",
-                status_icon, run.display_title, run.head_branch, run.name
+                "{} {} ({}) [{}] │ {} │ {} │ {}",
+                status_icon, run.display_title, run.head_branch, run.name, run.event, elapsed, age
             );
 
             let display_line: String = line.chars().skip(self.h_offset).collect();

@@ -203,35 +203,51 @@ impl Repository {
     }
 
     pub fn delete_branch(&self, name: &str, force: bool) -> Result<()> {
-        let mut branch = self.repo.find_branch(name, git2::BranchType::Local)?;
-
-        if branch.is_head() {
+        // Try to find as local branch first, then as remote tracking branch
+        let (mut branch, is_remote) = if let Ok(b) = self.repo.find_branch(name, git2::BranchType::Local) {
+            (b, false)
+        } else if let Ok(b) = self.repo.find_branch(name, git2::BranchType::Remote) {
+            (b, true)
+        } else {
             return Err(Error::Git(git2::Error::from_str(
-                "Cannot delete current branch",
+                &format!("Branch '{}' not found", name),
             )));
-        }
+        };
 
-        // Check if branch is merged into HEAD
-        if !force {
-            let branch_commit = branch.get().peel_to_commit()?;
-            let head_commit = self.repo.head()?.peel_to_commit()?;
-
-            // Check if branch commit is ancestor of HEAD (i.e., merged)
-            let is_merged = self
-                .repo
-                .merge_base(branch_commit.id(), head_commit.id())
-                .map(|base| base == branch_commit.id())
-                .unwrap_or(false);
-
-            if !is_merged {
+        if is_remote {
+            // Remote tracking branch - just delete it
+            branch.delete()?;
+            Ok(())
+        } else {
+            // Local branch deletion
+            if branch.is_head() {
                 return Err(Error::Git(git2::Error::from_str(
-                    "Branch not fully merged. Use D to force delete.",
+                    "Cannot delete current branch",
                 )));
             }
-        }
 
-        branch.delete()?;
-        Ok(())
+            // Check if branch is merged into HEAD
+            if !force {
+                let branch_commit = branch.get().peel_to_commit()?;
+                let head_commit = self.repo.head()?.peel_to_commit()?;
+
+                // Check if branch commit is ancestor of HEAD (i.e., merged)
+                let is_merged = self
+                    .repo
+                    .merge_base(branch_commit.id(), head_commit.id())
+                    .map(|base| base == branch_commit.id())
+                    .unwrap_or(false);
+
+                if !is_merged {
+                    return Err(Error::Git(git2::Error::from_str(
+                        "Branch not fully merged. Use D to force delete.",
+                    )));
+                }
+            }
+
+            branch.delete()?;
+            Ok(())
+        }
     }
 
     /// Delete a remote branch using git push --delete
@@ -1018,7 +1034,7 @@ impl Repository {
 
     pub fn fetch(&self, remote_name: &str) -> Result<()> {
         let output = std::process::Command::new("git")
-            .args(["fetch", remote_name])
+            .args(["fetch", "--prune", remote_name])
             .current_dir(&self.path)
             .output()
             .map_err(|e| Error::Io(e))?;
