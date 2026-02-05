@@ -22,18 +22,12 @@ pub enum DefaultCommitsMode {
     Graph,
 }
 
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum DefaultBranchesMode {
-    List,
-    Graph,
-}
-
 #[derive(Debug, Clone)]
 pub struct ViewDefaults {
     pub diff_mode: DefaultDiffMode,
     pub commits_mode: DefaultCommitsMode,
-    pub branches_mode: DefaultBranchesMode,
+    pub branches_show_remote: bool,
+    pub files_show_ignored: bool,
 }
 
 impl Default for ViewDefaults {
@@ -41,7 +35,8 @@ impl Default for ViewDefaults {
         Self {
             diff_mode: DefaultDiffMode::Split,
             commits_mode: DefaultCommitsMode::Graph,
-            branches_mode: DefaultBranchesMode::Graph,
+            branches_show_remote: true,
+            files_show_ignored: false,
         }
     }
 }
@@ -55,6 +50,8 @@ pub struct Config {
     pub date_format: DateFormat,
     /// Git data refresh interval in seconds (status, branches). 0 = disabled.
     pub auto_refresh: u32,
+    /// Auto fetch interval in seconds (fetch from all remotes). 0 = disabled.
+    pub auto_fetch_interval: u32,
     /// GitHub API refresh interval in seconds (PRs, Issues, Actions, Releases). 0 = disabled.
     pub github_refresh_interval: u64,
     pub confirm_destructive: bool,
@@ -87,7 +84,8 @@ impl Default for Config {
             diff_context_lines: 3,
             max_commits: 1000,
             date_format: DateFormat::Relative,
-            auto_refresh: 60, // Default: refresh git data every 60 seconds
+            auto_refresh: 60,       // Default: refresh git data every 60 seconds
+            auto_fetch_interval: 0, // Default: disabled (set to e.g. 300 for 5 min)
             github_refresh_interval: 60, // Default: refresh every 60 seconds
             confirm_destructive: true,
             editor: None,
@@ -167,6 +165,10 @@ impl Config {
             config.auto_refresh = *n as u32;
         }
 
+        if let Some(parser::Value::Integer(n)) = toml.get("auto_fetch_interval") {
+            config.auto_fetch_interval = *n as u32;
+        }
+
         if let Some(parser::Value::Integer(n)) = toml.get("github_refresh_interval") {
             config.github_refresh_interval = *n as u64;
         }
@@ -199,12 +201,11 @@ impl Config {
                     _ => DefaultCommitsMode::Compact,
                 };
             }
-            if let Some(parser::Value::String(s)) = views.get("branches_mode") {
-                config.view_defaults.branches_mode = match s.as_str() {
-                    "list" => DefaultBranchesMode::List,
-                    "graph" => DefaultBranchesMode::Graph,
-                    _ => DefaultBranchesMode::Graph,
-                };
+            if let Some(parser::Value::Boolean(b)) = views.get("branches_show_remote") {
+                config.view_defaults.branches_show_remote = *b;
+            }
+            if let Some(parser::Value::Boolean(b)) = views.get("files_show_ignored") {
+                config.view_defaults.files_show_ignored = *b;
             }
         }
 

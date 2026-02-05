@@ -32,14 +32,14 @@ pub struct FlatEntry {
 }
 
 impl FileTreeView {
-    pub fn new() -> Self {
+    pub fn new(show_ignored: bool) -> Self {
         Self {
             entries: Vec::new(),
             flat_entries: Vec::new(),
             selected: 0,
             offset: 0,
             h_offset: 0,
-            show_ignored: false,
+            show_ignored,
             max_content_width: 0,
             view_width: 0,
             search_query: None,

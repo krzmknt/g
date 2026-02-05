@@ -88,7 +88,7 @@ pub struct ConflictPreview {
 #[derive(Debug, Clone)]
 pub struct ActionPreview {
     pub run_id: u64,
-    pub content: Option<String>,  // None = loading
+    pub content: Option<String>, // None = loading
     pub spinner_frame: usize,
 }
 
@@ -422,7 +422,10 @@ impl DiffView {
         let day = remaining_days % 30 + 1;
         let hours = (secs % 86400) / 3600;
         let minutes = (secs % 3600) / 60;
-        let date = format!("{:04}-{:02}-{:02} {:02}:{:02}", years, months, day, hours, minutes);
+        let date = format!(
+            "{:04}-{:02}-{:02} {:02}:{:02}",
+            years, months, day, hours, minutes
+        );
 
         self.commit_preview = Some(CommitPreview {
             id: commit.id.clone(),
@@ -438,8 +441,14 @@ impl DiffView {
         self.h_offset = 0;
     }
 
+    /// Set the diff for a commit preview (called after set_commit_preview)
+    pub fn set_commit_diff(&mut self, diff: crate::git::DiffInfo) {
+        self.diff = diff;
+    }
+
     pub fn clear_commit_preview(&mut self) {
         self.commit_preview = None;
+        self.diff = crate::git::DiffInfo { files: Vec::new() };
         if self.preview_type == PreviewType::Commit {
             self.preview_type = PreviewType::Diff;
         }
@@ -526,7 +535,10 @@ impl DiffView {
 
     /// Check if action preview is loading
     pub fn is_action_loading(&self) -> bool {
-        self.action_preview.as_ref().map(|p| p.content.is_none()).unwrap_or(false)
+        self.action_preview
+            .as_ref()
+            .map(|p| p.content.is_none())
+            .unwrap_or(false)
     }
 
     pub fn clear_action_preview(&mut self) {
@@ -1130,7 +1142,12 @@ impl DiffView {
             self.scroll = total_lines.saturating_sub(visible_height);
         }
 
-        for (i, line) in lines.iter().skip(self.scroll).take(visible_height).enumerate() {
+        for (i, line) in lines
+            .iter()
+            .skip(self.scroll)
+            .take(visible_height)
+            .enumerate()
+        {
             let y = inner.y + i as u16;
             let display_line: String = line.chars().skip(self.h_offset).take(width).collect();
             buf.set_string(inner.x, y, &display_line, Style::new().fg(theme.foreground));
@@ -1165,7 +1182,12 @@ impl DiffView {
             self.scroll = total_lines.saturating_sub(visible_height);
         }
 
-        for (i, line) in lines.iter().skip(self.scroll).take(visible_height).enumerate() {
+        for (i, line) in lines
+            .iter()
+            .skip(self.scroll)
+            .take(visible_height)
+            .enumerate()
+        {
             let y = inner.y + i as u16;
             let display_line: String = line.chars().skip(self.h_offset).take(width).collect();
 
@@ -1225,7 +1247,12 @@ impl DiffView {
             self.scroll = total_lines.saturating_sub(visible_height);
         }
 
-        for (i, line) in lines.iter().skip(self.scroll).take(visible_height).enumerate() {
+        for (i, line) in lines
+            .iter()
+            .skip(self.scroll)
+            .take(visible_height)
+            .enumerate()
+        {
             let y = inner.y + i as u16;
             let display_line: String = line.chars().skip(self.h_offset).take(width).collect();
             buf.set_string(inner.x, y, &display_line, Style::new().fg(theme.foreground));
@@ -1253,12 +1280,18 @@ impl DiffView {
 
         // Header info
         lines.push((format!("commit {}", commit.id), theme.diff_hunk));
-        lines.push((format!("Author: {} <{}>", commit.author, commit.email), theme.foreground));
+        lines.push((
+            format!("Author: {} <{}>", commit.author, commit.email),
+            theme.foreground,
+        ));
         lines.push((format!("Date:   {}", commit.date), theme.foreground));
 
         // Refs (if any)
         if !commit.refs.is_empty() {
-            lines.push((format!("Refs:   {}", commit.refs.join(", ")), theme.branch_current));
+            lines.push((
+                format!("Refs:   {}", commit.refs.join(", ")),
+                theme.branch_current,
+            ));
         }
 
         // Empty line before message
@@ -1267,6 +1300,40 @@ impl DiffView {
         // Message (may be multiline)
         for line in commit.message.lines() {
             lines.push((format!("    {}", line), theme.foreground));
+        }
+
+        // Add diff content if available
+        if !self.diff.files.is_empty() {
+            lines.push((String::new(), theme.foreground));
+            lines.push(("---".to_string(), theme.border));
+            lines.push((String::new(), theme.foreground));
+
+            for file in &self.diff.files {
+                // File header
+                lines.push((
+                    format!("diff --git a/{} b/{}", file.path, file.path),
+                    theme.diff_hunk,
+                ));
+                lines.push((format!("--- a/{}", file.path), theme.diff_remove));
+                lines.push((format!("+++ b/{}", file.path), theme.diff_add));
+
+                for hunk in &file.hunks {
+                    // Hunk header
+                    lines.push((hunk.header.clone(), theme.diff_hunk));
+
+                    // Hunk lines
+                    for diff_line in &hunk.lines {
+                        let (prefix, color) = match diff_line.line_type {
+                            crate::git::LineType::Addition => ("+", theme.diff_add),
+                            crate::git::LineType::Deletion => ("-", theme.diff_remove),
+                            crate::git::LineType::Context => (" ", theme.foreground),
+                        };
+                        let content = diff_line.content.trim_end_matches('\n');
+                        lines.push((format!("{}{}", prefix, content), color));
+                    }
+                }
+                lines.push((String::new(), theme.foreground));
+            }
         }
 
         // Render with scrolling
@@ -1278,7 +1345,12 @@ impl DiffView {
             self.scroll = total_lines.saturating_sub(visible_height);
         }
 
-        for (i, (line, color)) in lines.iter().skip(self.scroll).take(visible_height).enumerate() {
+        for (i, (line, color)) in lines
+            .iter()
+            .skip(self.scroll)
+            .take(visible_height)
+            .enumerate()
+        {
             let y = inner.y + i as u16;
             let display_line: String = line.chars().skip(self.h_offset).take(width).collect();
             buf.set_string(inner.x, y, &display_line, Style::new().fg(*color));

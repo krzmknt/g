@@ -64,7 +64,11 @@ impl CommitsView {
 
     /// Set commit IDs to highlight (from PR commits)
     pub fn set_highlight_commits(&mut self, commit_ids: Vec<String>) {
-        crate::debug!("set_highlight_commits: {} commits, first={:?}", commit_ids.len(), commit_ids.first());
+        crate::debug!(
+            "set_highlight_commits: {} commits, first={:?}",
+            commit_ids.len(),
+            commit_ids.first()
+        );
         self.highlight_commits = commit_ids.into_iter().collect();
     }
 
@@ -100,7 +104,11 @@ impl CommitsView {
         if ref_name.starts_with("origin/")
             || ref_name.starts_with("upstream/")
             || ref_name.starts_with("remote/")
-            || (ref_name.contains('/') && !ref_name.contains("feature/") && !ref_name.contains("bugfix/") && !ref_name.contains("hotfix/") && !ref_name.contains("release/"))
+            || (ref_name.contains('/')
+                && !ref_name.contains("feature/")
+                && !ref_name.contains("bugfix/")
+                && !ref_name.contains("hotfix/")
+                && !ref_name.contains("release/"))
         {
             // Additional heuristic: if the first segment before / is short (like origin, upstream)
             // it's likely a remote. Feature branches like feature/xyz have longer prefixes.
@@ -108,7 +116,13 @@ impl CommitsView {
                 let prefix = &ref_name[..slash_pos];
                 // Common remote names are short (origin, upstream, fork, etc.)
                 // Feature branch prefixes are typically longer (feature, bugfix, hotfix, release)
-                if prefix.len() <= 8 && !["feature", "bugfix", "hotfix", "release", "fix", "chore", "docs", "test", "refactor"].contains(&prefix) {
+                if prefix.len() <= 8
+                    && ![
+                        "feature", "bugfix", "hotfix", "release", "fix", "chore", "docs", "test",
+                        "refactor",
+                    ]
+                    .contains(&prefix)
+                {
                     return theme.branch_remote;
                 }
             }
@@ -125,11 +139,11 @@ impl CommitsView {
     /// Toggle mark on the currently selected commit
     pub fn toggle_mark(&mut self) {
         let commit_id = match self.view_mode {
-            CommitsViewMode::Graph => {
-                self.graph_lines.get(self.selected)
-                    .and_then(|line| line.as_commit())
-                    .map(|c| c.id.clone())
-            }
+            CommitsViewMode::Graph => self
+                .graph_lines
+                .get(self.selected)
+                .and_then(|line| line.as_commit())
+                .map(|c| c.id.clone()),
             _ => self.commits.get(self.selected).map(|c| c.id.clone()),
         };
         if let Some(id) = commit_id {
@@ -160,7 +174,7 @@ impl CommitsView {
     fn is_highlighted(&self, commit_id: &str, _refs: &[String]) -> bool {
         // Only highlight commits that are in the PR (from GitHub API)
         // This excludes local unpushed commits
-        
+
         // Check by full commit ID first
         if self.highlight_commits.contains(commit_id) {
             return true;
@@ -430,25 +444,23 @@ impl CommitsView {
             CommitsViewMode::Graph => self
                 .graph_lines
                 .iter()
-                .map(|line| {
-                    match line {
-                        GraphLine::Connector(s) => s.len(),
-                        GraphLine::Commit(c) => {
-                            let refs_len = if c.refs.is_empty() {
-                                0
-                            } else {
-                                c.refs.join(", ").len() + 3
-                            };
-                            c.graph_chars.len()
-                                + refs_len
-                                + c.short_id.len()
-                                + 1
-                                + c.author.len()
-                                + 3
-                                + c.message.chars().count()
-                                + 1
-                                + c.relative_time().len()
-                        }
+                .map(|line| match line {
+                    GraphLine::Connector(s) => s.len(),
+                    GraphLine::Commit(c) => {
+                        let refs_len = if c.refs.is_empty() {
+                            0
+                        } else {
+                            c.refs.join(", ").len() + 3
+                        };
+                        c.graph_chars.len()
+                            + refs_len
+                            + c.short_id.len()
+                            + 1
+                            + c.author.len()
+                            + 3
+                            + c.message.chars().count()
+                            + 1
+                            + c.relative_time().len()
                     }
                 })
                 .max()
@@ -727,7 +739,9 @@ impl CommitsView {
             // Opening bracket "["
             let bracket_open = "[";
             let bracket_open_len = bracket_open.chars().count();
-            if current_pos + bracket_open_len > visible_start && current_pos < visible_start + width as usize {
+            if current_pos + bracket_open_len > visible_start
+                && current_pos < visible_start + width as usize
+            {
                 let skip = visible_start.saturating_sub(current_pos);
                 let screen_x = if current_pos >= visible_start {
                     screen_start + (current_pos - visible_start)
@@ -771,9 +785,15 @@ impl CommitsView {
                             };
                             if screen_x < width as usize {
                                 let available = (width as usize).saturating_sub(screen_x);
-                                let part: String = separator.chars().skip(skip).take(available).collect();
+                                let part: String =
+                                    separator.chars().skip(skip).take(available).collect();
                                 if !part.is_empty() {
-                                    buf.set_string(x + screen_x as u16, y, &part, Style::new().fg(theme.branch_local));
+                                    buf.set_string(
+                                        x + screen_x as u16,
+                                        y,
+                                        &part,
+                                        Style::new().fg(theme.branch_local),
+                                    );
                                 }
                             }
                         }
@@ -793,9 +813,15 @@ impl CommitsView {
                         };
                         if screen_x < width as usize {
                             let available = (width as usize).saturating_sub(screen_x);
-                            let part: String = local_part.chars().skip(skip).take(available).collect();
+                            let part: String =
+                                local_part.chars().skip(skip).take(available).collect();
                             if !part.is_empty() {
-                                buf.set_string(x + screen_x as u16, y, &part, Style::new().fg(local_color));
+                                buf.set_string(
+                                    x + screen_x as u16,
+                                    y,
+                                    &part,
+                                    Style::new().fg(local_color),
+                                );
                             }
                         }
                     }
@@ -813,9 +839,18 @@ impl CommitsView {
                         };
                         if screen_x < width as usize {
                             let available = (width as usize).saturating_sub(screen_x);
-                            let part: String = arrow_and_remote.chars().skip(skip).take(available).collect();
+                            let part: String = arrow_and_remote
+                                .chars()
+                                .skip(skip)
+                                .take(available)
+                                .collect();
                             if !part.is_empty() {
-                                buf.set_string(x + screen_x as u16, y, &part, Style::new().fg(theme.branch_remote));
+                                buf.set_string(
+                                    x + screen_x as u16,
+                                    y,
+                                    &part,
+                                    Style::new().fg(theme.branch_remote),
+                                );
                             }
                         }
                     }
@@ -836,7 +871,8 @@ impl CommitsView {
 
                         if screen_x < width as usize {
                             let available = (width as usize).saturating_sub(screen_x);
-                            let part: String = ref_display.chars().skip(skip).take(available).collect();
+                            let part: String =
+                                ref_display.chars().skip(skip).take(available).collect();
                             if !part.is_empty() {
                                 let color = self.get_single_ref_color(ref_name, theme);
                                 buf.set_string(
@@ -851,11 +887,13 @@ impl CommitsView {
                     current_pos = ref_end;
                 }
             }
-            
+
             // Closing bracket "] " (with trailing space)
             let close_str = "] ";
             let close_pos = current_pos;
-            if close_pos + close_str.len() > visible_start && close_pos < visible_start + width as usize {
+            if close_pos + close_str.len() > visible_start
+                && close_pos < visible_start + width as usize
+            {
                 let skip = visible_start.saturating_sub(close_pos);
                 let screen_x = if close_pos >= visible_start {
                     screen_start + (close_pos - visible_start)
@@ -975,9 +1013,9 @@ impl CommitsView {
             let origin_match = format!("origin/{}", local);
             let upstream_match = format!("upstream/{}", local);
 
-            let matching_remote = remote_branches.iter().find(|&&r| {
-                r == origin_match || r == upstream_match
-            });
+            let matching_remote = remote_branches
+                .iter()
+                .find(|&&r| r == origin_match || r == upstream_match);
 
             if let Some(&remote) = matching_remote {
                 // Found a matching remote, display as "local -> remote"
@@ -1124,7 +1162,12 @@ impl CommitsView {
                     // Build left part: mark + graph + space + hash + refs + author + message (without time)
                     let left_part = format!(
                         "{}{} {}{} {} {}",
-                        mark_prefix, commit.graph_chars, commit.short_id, refs_str, commit.author, commit.message
+                        mark_prefix,
+                        commit.graph_chars,
+                        commit.short_id,
+                        refs_str,
+                        commit.author,
+                        commit.message
                     );
 
                     // Apply horizontal scroll to left part
@@ -1288,13 +1331,15 @@ impl CommitsView {
             // Render each ref with its own color
             // Format: " [ref1, ref2, ...]" - leading space, opening bracket, refs separated by ", ", closing bracket
             let mut current_ref_pos = 0usize; // position within refs_str
-            
+
             // Leading " [" (2 chars)
             let bracket_open = " [";
             let bracket_open_len = bracket_open.chars().count();
             let visible_start = self.h_offset.saturating_sub(pos);
-            
-            if current_ref_pos + bracket_open_len > visible_start && current_ref_pos < visible_start + width as usize {
+
+            if current_ref_pos + bracket_open_len > visible_start
+                && current_ref_pos < visible_start + width as usize
+            {
                 let skip = visible_start.saturating_sub(current_ref_pos);
                 let screen_x = if current_ref_pos >= visible_start {
                     screen_start + (current_ref_pos - visible_start)
@@ -1329,7 +1374,9 @@ impl CommitsView {
                     // Render separator
                     if !separator.is_empty() {
                         let sep_end = current_ref_pos + separator.len();
-                        if sep_end > visible_start && current_ref_pos < visible_start + width as usize {
+                        if sep_end > visible_start
+                            && current_ref_pos < visible_start + width as usize
+                        {
                             let skip = visible_start.saturating_sub(current_ref_pos);
                             let screen_x = if current_ref_pos >= visible_start {
                                 screen_start + (current_ref_pos - visible_start)
@@ -1338,9 +1385,15 @@ impl CommitsView {
                             };
                             if screen_x < width as usize {
                                 let available = (width as usize).saturating_sub(screen_x);
-                                let part: String = separator.chars().skip(skip).take(available).collect();
+                                let part: String =
+                                    separator.chars().skip(skip).take(available).collect();
                                 if !part.is_empty() {
-                                    buf.set_string(x + screen_x as u16, y, &part, Style::new().fg(theme.branch_local));
+                                    buf.set_string(
+                                        x + screen_x as u16,
+                                        y,
+                                        &part,
+                                        Style::new().fg(theme.branch_local),
+                                    );
                                 }
                             }
                         }
@@ -1351,7 +1404,8 @@ impl CommitsView {
                     let local_color = self.get_single_ref_color(local_part, theme);
                     let local_len = local_part.chars().count();
                     let local_end = current_ref_pos + local_len;
-                    if local_end > visible_start && current_ref_pos < visible_start + width as usize {
+                    if local_end > visible_start && current_ref_pos < visible_start + width as usize
+                    {
                         let skip = visible_start.saturating_sub(current_ref_pos);
                         let screen_x = if current_ref_pos >= visible_start {
                             screen_start + (current_ref_pos - visible_start)
@@ -1360,9 +1414,15 @@ impl CommitsView {
                         };
                         if screen_x < width as usize {
                             let available = (width as usize).saturating_sub(screen_x);
-                            let part: String = local_part.chars().skip(skip).take(available).collect();
+                            let part: String =
+                                local_part.chars().skip(skip).take(available).collect();
                             if !part.is_empty() {
-                                buf.set_string(x + screen_x as u16, y, &part, Style::new().fg(local_color));
+                                buf.set_string(
+                                    x + screen_x as u16,
+                                    y,
+                                    &part,
+                                    Style::new().fg(local_color),
+                                );
                             }
                         }
                     }
@@ -1371,7 +1431,9 @@ impl CommitsView {
                     // Render " -> remote" part (purple)
                     let remote_len = arrow_and_remote.chars().count();
                     let remote_end = current_ref_pos + remote_len;
-                    if remote_end > visible_start && current_ref_pos < visible_start + width as usize {
+                    if remote_end > visible_start
+                        && current_ref_pos < visible_start + width as usize
+                    {
                         let skip = visible_start.saturating_sub(current_ref_pos);
                         let screen_x = if current_ref_pos >= visible_start {
                             screen_start + (current_ref_pos - visible_start)
@@ -1380,9 +1442,18 @@ impl CommitsView {
                         };
                         if screen_x < width as usize {
                             let available = (width as usize).saturating_sub(screen_x);
-                            let part: String = arrow_and_remote.chars().skip(skip).take(available).collect();
+                            let part: String = arrow_and_remote
+                                .chars()
+                                .skip(skip)
+                                .take(available)
+                                .collect();
                             if !part.is_empty() {
-                                buf.set_string(x + screen_x as u16, y, &part, Style::new().fg(theme.branch_remote));
+                                buf.set_string(
+                                    x + screen_x as u16,
+                                    y,
+                                    &part,
+                                    Style::new().fg(theme.branch_remote),
+                                );
                             }
                         }
                     }
@@ -1403,7 +1474,8 @@ impl CommitsView {
 
                         if screen_x < width as usize {
                             let available = (width as usize).saturating_sub(screen_x);
-                            let part: String = ref_display.chars().skip(skip).take(available).collect();
+                            let part: String =
+                                ref_display.chars().skip(skip).take(available).collect();
                             if !part.is_empty() {
                                 let color = self.get_single_ref_color(ref_name, theme);
                                 buf.set_string(
@@ -1418,7 +1490,7 @@ impl CommitsView {
                     current_ref_pos = ref_end;
                 }
             }
-            
+
             // Closing bracket "]"
             let close_pos = current_ref_pos;
             if close_pos + 1 > visible_start && close_pos < visible_start + width as usize {

@@ -16,7 +16,7 @@ pub struct WorkflowRun {
     pub updated_at: Option<String>,
     pub display_title: String,
     #[serde(default)]
-    pub event: String,              // "push", "pull_request", "schedule", etc.
+    pub event: String, // "push", "pull_request", "schedule", etc.
     #[serde(default)]
     pub workflow_name: String,
     #[serde(default)]

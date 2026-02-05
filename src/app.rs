@@ -1,4 +1,4 @@
-use crate::config::{Config, DefaultBranchesMode, DefaultCommitsMode, DefaultDiffMode, Theme};
+use crate::config::{Config, DefaultCommitsMode, DefaultDiffMode, Theme};
 use crate::error::Result;
 use crate::git::{IssueInfo, PullRequestInfo, ReleaseInfo, Repository, WorkflowRun};
 use crate::input::{
@@ -47,6 +47,8 @@ pub enum AsyncLoadResult {
     GitFileTree(std::result::Result<Vec<FileTreeEntry>, String>),
     // Remote operation results (fetch/pull/push)
     RemoteOperationComplete(std::result::Result<String, String>),
+    // Background fetch from all remotes (periodic auto-fetch)
+    BackgroundFetchComplete(std::result::Result<String, String>),
 }
 
 // Re-export PanelType as Panel for backwards compatibility within app
@@ -65,9 +67,9 @@ pub enum Mode {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SelectAction {
-    ResetOrRevert,  // Choose between reset and revert
-    ResetMode,      // Choose reset mode: --soft, --mixed, --hard
-    PrMergeMethod,  // Choose PR merge method: merge, rebase, squash
+    ResetOrRevert, // Choose between reset and revert
+    ResetMode,     // Choose reset mode: --soft, --mixed, --hard
+    PrMergeMethod, // Choose PR merge method: merge, rebase, squash
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -174,6 +176,11 @@ pub struct App {
     // Last auto-refresh time (for periodic background refresh of all data)
     last_auto_refresh: Option<Instant>,
 
+    // Last auto-fetch time (for periodic fetch from all remotes)
+    last_auto_fetch: Option<Instant>,
+    // Flag to track if background fetch is in progress
+    fetching_remotes: bool,
+
     // Flags to track if data is being refreshed in background
     refreshing_status: bool,
     refreshing_branches: bool,
@@ -200,18 +207,18 @@ pub struct App {
 /// Remote operation type for spinner display
 #[derive(Debug, Clone)]
 pub enum RemoteOperation {
-    Fetch(String),           // branch/remote name
-    Pull(String),            // branch name
-    Push(String),            // branch name
-    PrMerge(u32),            // PR number
-    PrClose(u32),            // PR number
-    PrCreate(String),        // base branch
-    BranchDelete(String),    // branch name
-    DeleteMergedBranches,    // deleting multiple merged branches
-    IssueComment(u32),       // issue number
-    IssueClose(u32),         // issue number
-    IssueReopen(u32),        // issue number
-    IssueDelete(u32),        // issue number
+    Fetch(String),        // branch/remote name
+    Pull(String),         // branch name
+    Push(String),         // branch name
+    PrMerge(u32),         // PR number
+    PrClose(u32),         // PR number
+    PrCreate(String),     // base branch
+    BranchDelete(String), // branch name
+    DeleteMergedBranches, // deleting multiple merged branches
+    IssueComment(u32),    // issue number
+    IssueClose(u32),      // issue number
+    IssueReopen(u32),     // issue number
+    IssueDelete(u32),     // issue number
 }
 
 #[derive(Debug, Clone)]
@@ -254,7 +261,8 @@ impl App {
             DefaultCommitsMode::Graph => commits_view.set_view_mode(CommitsViewMode::Graph),
         }
 
-        let branches_view = BranchesView::new();
+        let branches_view = BranchesView::new(config.view_defaults.branches_show_remote);
+        let filetree_view = FileTreeView::new(config.view_defaults.files_show_ignored);
 
         // Create channel for async loading
         let (async_sender, async_receiver) = mpsc::channel();
@@ -280,7 +288,7 @@ impl App {
             worktree_view: WorktreeView::new(),
             submodules_view: SubmodulesView::new(),
             blame_view: BlameView::new(),
-            filetree_view: FileTreeView::new(),
+            filetree_view,
             conflict_view: ConflictView::new(),
             pull_requests_view: PullRequestsView::new(),
             issues_view: IssuesView::new(),
@@ -303,6 +311,8 @@ impl App {
             repo_path,
             last_spinner_tick: Instant::now(),
             last_auto_refresh: None,
+            last_auto_fetch: None,
+            fetching_remotes: false,
             refreshing_status: false,
             refreshing_branches: false,
             refreshing_commits: false,
@@ -343,6 +353,9 @@ impl App {
 
             // Periodic background refresh for all data
             self.check_auto_refresh();
+
+            // Periodic background fetch from all remotes
+            self.check_auto_fetch();
 
             self.draw()?;
 
@@ -401,7 +414,11 @@ impl App {
                 AsyncLoadResult::PrCommits(pr_number, Ok(commit_ids)) => {
                     // Only apply if we're still waiting for this PR's commits
                     if self.refreshing_pr_commits == Some(pr_number) {
-                        debug!("Async fetch_pr_commits: got {} commits for PR #{}", commit_ids.len(), pr_number);
+                        debug!(
+                            "Async fetch_pr_commits: got {} commits for PR #{}",
+                            commit_ids.len(),
+                            pr_number
+                        );
                         self.commits_view.set_highlight_commits(commit_ids);
                         self.refreshing_pr_commits = None;
                     }
@@ -516,6 +533,14 @@ impl App {
                         self.refreshing_action_view = None;
                     }
                 }
+                AsyncLoadResult::BackgroundFetchComplete(Ok(_msg)) => {
+                    self.fetching_remotes = false;
+                    // Refresh git data after fetch
+                    self.start_background_refresh_all();
+                }
+                AsyncLoadResult::BackgroundFetchComplete(Err(_)) => {
+                    self.fetching_remotes = false;
+                }
             }
         }
     }
@@ -574,6 +599,75 @@ impl App {
             self.last_auto_refresh = Some(Instant::now());
             self.start_background_refresh_all();
         }
+    }
+
+    /// Check if it's time to do a periodic background fetch from all remotes
+    fn check_auto_fetch(&mut self) {
+        let interval = self.config.auto_fetch_interval;
+        if interval == 0 {
+            return; // Disabled
+        }
+
+        // Skip if already fetching
+        if self.fetching_remotes {
+            return;
+        }
+
+        let should_fetch = match self.last_auto_fetch {
+            None => {
+                // First time, set the timestamp
+                self.last_auto_fetch = Some(Instant::now());
+                false
+            }
+            Some(last) => last.elapsed() >= Duration::from_secs(interval as u64),
+        };
+
+        if should_fetch {
+            self.last_auto_fetch = Some(Instant::now());
+            self.start_background_fetch_all();
+        }
+    }
+
+    /// Start background fetch from all remotes
+    fn start_background_fetch_all(&mut self) {
+        if self.fetching_remotes {
+            return;
+        }
+        self.fetching_remotes = true;
+
+        let sender = self.async_sender.clone();
+        let repo_path = self.repo_path.clone();
+
+        thread::spawn(move || {
+            let result: std::result::Result<String, String> = (|| {
+                let repo = crate::git::Repository::open(&repo_path).map_err(|e| e.to_string())?;
+                let remotes = repo.remotes().map_err(|e| e.to_string())?;
+
+                let mut fetched = Vec::new();
+                let mut errors = Vec::new();
+
+                for remote in remotes {
+                    match repo.fetch(&remote) {
+                        Ok(()) => fetched.push(remote),
+                        Err(e) => errors.push(format!("{}: {}", remote, e)),
+                    }
+                }
+
+                if errors.is_empty() {
+                    Ok(format!("Fetched from: {}", fetched.join(", ")))
+                } else if fetched.is_empty() {
+                    Err(errors.join("; "))
+                } else {
+                    Ok(format!(
+                        "Fetched from: {}; errors: {}",
+                        fetched.join(", "),
+                        errors.join("; ")
+                    ))
+                }
+            })();
+
+            let _ = sender.send(AsyncLoadResult::BackgroundFetchComplete(result));
+        });
     }
 
     /// Start async loading of pull requests
@@ -953,7 +1047,10 @@ impl App {
 
     fn refresh_pr_preview(&mut self) {
         if let Some(pr) = self.pull_requests_view.selected_pr() {
-            debug!("refresh_pr_preview: PR #{} branch={}", pr.number, pr.head_ref_name);
+            debug!(
+                "refresh_pr_preview: PR #{} branch={}",
+                pr.number, pr.head_ref_name
+            );
             self.diff_view.set_pr_preview(pr);
             // Highlight related commits by branch name
             let branch = pr.head_ref_name.clone();
@@ -975,7 +1072,12 @@ impl App {
 
     fn refresh_commit_preview(&mut self) {
         if let Some(commit) = self.commits_view.selected_commit() {
+            let commit_id = commit.id.clone();
             self.diff_view.set_commit_preview(commit);
+            // Load the commit diff
+            if let Ok(diff) = self.repo.diff_commit(&commit_id) {
+                self.diff_view.set_commit_diff(diff);
+            }
         } else {
             self.diff_view.clear_commit_preview();
         }
@@ -1173,12 +1275,14 @@ impl App {
         thread::spawn(move || {
             let result = crate::git::Repository::open(&repo_path)
                 .and_then(|repo| repo.pull_branch(&remote, &branch))
-                .map(|merge_result| {
-                    match merge_result {
-                        crate::git::MergeResult::UpToDate => format!("Branch {} is up to date", branch),
-                        crate::git::MergeResult::FastForward => format!("Fast-forwarded branch: {}", branch),
-                        crate::git::MergeResult::Merged => format!("Merged branch: {}", branch),
-                        crate::git::MergeResult::Conflict => format!("Merge conflicts in branch: {}", branch),
+                .map(|merge_result| match merge_result {
+                    crate::git::MergeResult::UpToDate => format!("Branch {} is up to date", branch),
+                    crate::git::MergeResult::FastForward => {
+                        format!("Fast-forwarded branch: {}", branch)
+                    }
+                    crate::git::MergeResult::Merged => format!("Merged branch: {}", branch),
+                    crate::git::MergeResult::Conflict => {
+                        format!("Merge conflicts in branch: {}", branch)
                     }
                 })
                 .map_err(|e| e.to_string());
@@ -1483,18 +1587,36 @@ impl App {
                     RemoteOperation::Fetch(branch) => format!("{} Fetching {}...", spinner, branch),
                     RemoteOperation::Pull(branch) => format!("{} Pulling {}...", spinner, branch),
                     RemoteOperation::Push(branch) => format!("{} Pushing {}...", spinner, branch),
-                    RemoteOperation::PrMerge(pr_number) => format!("{} Merging PR #{}...", spinner, pr_number),
-                    RemoteOperation::PrClose(pr_number) => format!("{} Closing PR #{}...", spinner, pr_number),
-                    RemoteOperation::PrCreate(base) => format!("{} Creating PR (base: {})...", spinner, base),
-                    RemoteOperation::BranchDelete(name) => format!("{} Deleting branch {}...", spinner, name),
-                    RemoteOperation::DeleteMergedBranches => format!("{} Deleting merged branches...", spinner),
-                    RemoteOperation::IssueComment(issue_number) => format!("{} Adding comment to #{}...", spinner, issue_number),
-                    RemoteOperation::IssueClose(issue_number) => format!("{} Closing issue #{}...", spinner, issue_number),
-                    RemoteOperation::IssueReopen(issue_number) => format!("{} Reopening issue #{}...", spinner, issue_number),
-                    RemoteOperation::IssueDelete(issue_number) => format!("{} Deleting issue #{}...", spinner, issue_number),
+                    RemoteOperation::PrMerge(pr_number) => {
+                        format!("{} Merging PR #{}...", spinner, pr_number)
+                    }
+                    RemoteOperation::PrClose(pr_number) => {
+                        format!("{} Closing PR #{}...", spinner, pr_number)
+                    }
+                    RemoteOperation::PrCreate(base) => {
+                        format!("{} Creating PR (base: {})...", spinner, base)
+                    }
+                    RemoteOperation::BranchDelete(name) => {
+                        format!("{} Deleting branch {}...", spinner, name)
+                    }
+                    RemoteOperation::DeleteMergedBranches => {
+                        format!("{} Deleting merged branches...", spinner)
+                    }
+                    RemoteOperation::IssueComment(issue_number) => {
+                        format!("{} Adding comment to #{}...", spinner, issue_number)
+                    }
+                    RemoteOperation::IssueClose(issue_number) => {
+                        format!("{} Closing issue #{}...", spinner, issue_number)
+                    }
+                    RemoteOperation::IssueReopen(issue_number) => {
+                        format!("{} Reopening issue #{}...", spinner, issue_number)
+                    }
+                    RemoteOperation::IssueDelete(issue_number) => {
+                        format!("{} Deleting issue #{}...", spinner, issue_number)
+                    }
                 };
                 let spinner_x = footer.x + 1;
-                let spinner_y = footer.y;  // Top line of footer (message line)
+                let spinner_y = footer.y; // Top line of footer (message line)
                 buf.set_string(
                     spinner_x,
                     spinner_y,
@@ -1688,7 +1810,13 @@ impl App {
                     ],
                     PanelType::Conflicts => &[("o", "use ours"), ("t", "use theirs")],
                     PanelType::PullRequests => &[("M", "merge"), ("d", "close"), ("R", "reload")],
-                    PanelType::Issues => &[("c", "comment"), ("d", "close"), ("D", "delete"), ("r", "reopen"), ("R", "reload")],
+                    PanelType::Issues => &[
+                        ("c", "comment"),
+                        ("d", "close"),
+                        ("D", "delete"),
+                        ("r", "reopen"),
+                        ("R", "reload"),
+                    ],
                     PanelType::Actions => &[("Enter", "view"), ("o", "open"), ("R", "reload")],
                     PanelType::Releases => &[],
                 };
@@ -1805,18 +1933,16 @@ impl App {
                             method
                         )
                     }
-                    ConfirmAction::PrClose => format!(
-                        "Close PR #{}?",
-                        confirm_target.as_deref().unwrap_or("?")
-                    ),
+                    ConfirmAction::PrClose => {
+                        format!("Close PR #{}?", confirm_target.as_deref().unwrap_or("?"))
+                    }
                     ConfirmAction::PrCreate => format!(
                         "Create PR to '{}'?",
                         confirm_target.as_deref().unwrap_or("?")
                     ),
-                    ConfirmAction::IssueClose => format!(
-                        "Close issue #{}?",
-                        confirm_target.as_deref().unwrap_or("?")
-                    ),
+                    ConfirmAction::IssueClose => {
+                        format!("Close issue #{}?", confirm_target.as_deref().unwrap_or("?"))
+                    }
                     ConfirmAction::IssueReopen => format!(
                         "Reopen issue #{}?",
                         confirm_target.as_deref().unwrap_or("?")
@@ -1924,7 +2050,12 @@ impl App {
                 // Show description of selected option
                 let selected_desc = options.get(select_index).map(|(_, _, d)| *d).unwrap_or("");
                 let desc_style = Style::new().fg(theme.untracked);
-                buf.set_string(x_pos + 1, area.y + 2, &format!("- {}", selected_desc), desc_style);
+                buf.set_string(
+                    x_pos + 1,
+                    area.y + 2,
+                    &format!("- {}", selected_desc),
+                    desc_style,
+                );
             }
         }
     }
@@ -2199,7 +2330,8 @@ impl App {
                     // Parse remote/branch from name like "origin/feature"
                     if let Some(slash_pos) = name.find('/') {
                         if self.remote_operation.is_none() {
-                            self.remote_operation = Some(RemoteOperation::BranchDelete(name.clone()));
+                            self.remote_operation =
+                                Some(RemoteOperation::BranchDelete(name.clone()));
                             let sender = self.async_sender.clone();
                             let repo_path = self.repo_path.clone();
                             let full_name = name.clone();
@@ -2207,10 +2339,13 @@ impl App {
                             let branch_name = name[slash_pos + 1..].to_string();
                             thread::spawn(move || {
                                 let result = crate::git::Repository::open(&repo_path)
-                                    .and_then(|repo| repo.delete_remote_branch(&remote_name, &branch_name))
+                                    .and_then(|repo| {
+                                        repo.delete_remote_branch(&remote_name, &branch_name)
+                                    })
                                     .map(|()| format!("Deleted remote branch '{}'", full_name))
                                     .map_err(|e| format!("Delete failed: {}", e));
-                                let _ = sender.send(AsyncLoadResult::RemoteOperationComplete(result));
+                                let _ =
+                                    sender.send(AsyncLoadResult::RemoteOperationComplete(result));
                             });
                         }
                     } else {
@@ -2265,7 +2400,10 @@ impl App {
                                     format!("Merged '{}' into current branch", branch_name)
                                 }
                                 crate::git::MergeResult::Conflict => {
-                                    format!("Merge conflicts with '{}' - resolve manually", branch_name)
+                                    format!(
+                                        "Merge conflicts with '{}' - resolve manually",
+                                        branch_name
+                                    )
                                 }
                             };
                             self.message = Some(msg);
@@ -2306,7 +2444,9 @@ impl App {
                 }
             }
             ConfirmAction::DeleteMergedBranches => {
-                if let Some((local_branches, remote_branches)) = self.merged_branches_to_delete.take() {
+                if let Some((local_branches, remote_branches)) =
+                    self.merged_branches_to_delete.take()
+                {
                     if self.remote_operation.is_none() {
                         self.remote_operation = Some(RemoteOperation::DeleteMergedBranches);
                         let sender = self.async_sender.clone();
@@ -2332,7 +2472,9 @@ impl App {
                                         if let Some(slash_pos) = branch.find('/') {
                                             let remote_name = &branch[..slash_pos];
                                             let branch_name = &branch[slash_pos + 1..];
-                                            match repo.delete_remote_branch(remote_name, branch_name) {
+                                            match repo
+                                                .delete_remote_branch(remote_name, branch_name)
+                                            {
                                                 Ok(()) => deleted_remote += 1,
                                                 Err(e) => errors.push(format!("{}: {}", branch, e)),
                                             }
@@ -2352,7 +2494,10 @@ impl App {
                                     } else {
                                         Ok(format!(
                                             "Deleted {} local, {} remote. {} errors: {}",
-                                            deleted_local, deleted_remote, errors.len(), errors.join("; ")
+                                            deleted_local,
+                                            deleted_remote,
+                                            errors.len(),
+                                            errors.join("; ")
                                         ))
                                     }
                                 });
@@ -2387,14 +2532,23 @@ impl App {
                             let method_name = method_name.to_string();
                             thread::spawn(move || {
                                 let output = std::process::Command::new("gh")
-                                    .args(["pr", "merge", &pr_number.to_string(), &method, "--delete-branch"])
+                                    .args([
+                                        "pr",
+                                        "merge",
+                                        &pr_number.to_string(),
+                                        &method,
+                                        "--delete-branch",
+                                    ])
                                     .current_dir(&repo_path)
                                     .output();
 
                                 let result = match output {
                                     Ok(result) => {
                                         if result.status.success() {
-                                            Ok(format!("Merged PR #{} with {}", pr_number, method_name))
+                                            Ok(format!(
+                                                "Merged PR #{} with {}",
+                                                pr_number, method_name
+                                            ))
                                         } else {
                                             let stderr = String::from_utf8_lossy(&result.stderr);
                                             Err(format!("Merge failed: {}", stderr.trim()))
@@ -2402,7 +2556,8 @@ impl App {
                                     }
                                     Err(e) => Err(format!("Failed to run gh: {}", e)),
                                 };
-                                let _ = sender.send(AsyncLoadResult::RemoteOperationComplete(result));
+                                let _ =
+                                    sender.send(AsyncLoadResult::RemoteOperationComplete(result));
                             });
                         }
                     }
@@ -2433,7 +2588,8 @@ impl App {
                                     }
                                     Err(e) => Err(format!("Failed to run gh: {}", e)),
                                 };
-                                let _ = sender.send(AsyncLoadResult::RemoteOperationComplete(result));
+                                let _ =
+                                    sender.send(AsyncLoadResult::RemoteOperationComplete(result));
                             });
                         }
                     }
@@ -2442,7 +2598,8 @@ impl App {
             ConfirmAction::PrCreate => {
                 if let Some(ref base_branch) = self.confirm_target {
                     if self.remote_operation.is_none() {
-                        self.remote_operation = Some(RemoteOperation::PrCreate(base_branch.clone()));
+                        self.remote_operation =
+                            Some(RemoteOperation::PrCreate(base_branch.clone()));
                         let sender = self.async_sender.clone();
                         let repo_path = self.repo_path.clone();
                         let base = base_branch.clone();
@@ -2493,7 +2650,8 @@ impl App {
                                     }
                                     Err(e) => Err(format!("Failed to run gh: {}", e)),
                                 };
-                                let _ = sender.send(AsyncLoadResult::RemoteOperationComplete(result));
+                                let _ =
+                                    sender.send(AsyncLoadResult::RemoteOperationComplete(result));
                             });
                         }
                     }
@@ -2503,7 +2661,8 @@ impl App {
                 if let Some(ref issue_number_str) = self.confirm_target {
                     if let Ok(issue_number) = issue_number_str.parse::<u32>() {
                         if self.remote_operation.is_none() {
-                            self.remote_operation = Some(RemoteOperation::IssueReopen(issue_number));
+                            self.remote_operation =
+                                Some(RemoteOperation::IssueReopen(issue_number));
                             let sender = self.async_sender.clone();
                             let repo_path = self.repo_path.clone();
                             thread::spawn(move || {
@@ -2523,7 +2682,8 @@ impl App {
                                     }
                                     Err(e) => Err(format!("Failed to run gh: {}", e)),
                                 };
-                                let _ = sender.send(AsyncLoadResult::RemoteOperationComplete(result));
+                                let _ =
+                                    sender.send(AsyncLoadResult::RemoteOperationComplete(result));
                             });
                         }
                     }
@@ -2533,7 +2693,8 @@ impl App {
                 if let Some(ref issue_number_str) = self.confirm_target {
                     if let Ok(issue_number) = issue_number_str.parse::<u32>() {
                         if self.remote_operation.is_none() {
-                            self.remote_operation = Some(RemoteOperation::IssueDelete(issue_number));
+                            self.remote_operation =
+                                Some(RemoteOperation::IssueDelete(issue_number));
                             let sender = self.async_sender.clone();
                             let repo_path = self.repo_path.clone();
                             thread::spawn(move || {
@@ -2553,7 +2714,8 @@ impl App {
                                     }
                                     Err(e) => Err(format!("Failed to run gh: {}", e)),
                                 };
-                                let _ = sender.send(AsyncLoadResult::RemoteOperationComplete(result));
+                                let _ =
+                                    sender.send(AsyncLoadResult::RemoteOperationComplete(result));
                             });
                         }
                     }
@@ -2967,6 +3129,11 @@ impl App {
         if let Ok(existing) = std::fs::read_to_string(&config_path) {
             let mut in_columns_section = false;
             for line in existing.lines() {
+                // Skip layout comment
+                if line.starts_with("# Layout (auto-generated)") {
+                    in_columns_section = true;
+                    continue;
+                }
                 // Skip old column/panel definitions
                 if line.starts_with("[[columns]]") {
                     in_columns_section = true;
@@ -2974,7 +3141,7 @@ impl App {
                 }
                 if in_columns_section {
                     // Skip until we hit a non-indented, non-empty line that's not part of columns
-                    if line.starts_with("[[") && !line.starts_with("[[columns]]") {
+                    if line.starts_with('[') && !line.starts_with("[[columns") {
                         in_columns_section = false;
                     } else {
                         continue;
@@ -3338,7 +3505,8 @@ impl App {
             KeyCode::Char('C') if self.focused_panel == PanelType::Branches => {
                 if let Some(branch) = self.branches_view.selected_branch() {
                     if branch.is_head {
-                        self.message = Some("Select a target branch (not current branch)".to_string());
+                        self.message =
+                            Some("Select a target branch (not current branch)".to_string());
                     } else {
                         self.confirm_target = Some(branch.name.clone());
                         self.mode = Mode::Confirm(ConfirmAction::PrCreate);
@@ -3633,7 +3801,8 @@ impl App {
                         if local.is_empty() && remote.is_empty() {
                             self.message = Some("No merged branches to delete".to_string());
                         } else {
-                            self.confirm_target = Some(format!("{} local, {} remote", local.len(), remote.len()));
+                            self.confirm_target =
+                                Some(format!("{} local, {} remote", local.len(), remote.len()));
                             self.merged_branches_to_delete = Some((local, remote));
                             self.mode = Mode::Confirm(ConfirmAction::DeleteMergedBranches);
                         }
@@ -4502,7 +4671,11 @@ impl App {
                 Ok(files) => {
                     let count = files.len();
                     self.filetree_view.set_filter(files);
-                    self.message = Some(format!("Filtered: {} files from {} commits", count, commit_ids.len()));
+                    self.message = Some(format!(
+                        "Filtered: {} files from {} commits",
+                        count,
+                        commit_ids.len()
+                    ));
                 }
                 Err(e) => {
                     self.message = Some(format!("Error getting files: {}", e));
@@ -4668,7 +4841,8 @@ impl App {
             ["checkout", name] => {
                 let name = name.to_string();
                 // Command-line checkout assumes local branch
-                self.repo.switch_branch(&name, crate::git::BranchType::Local)?;
+                self.repo
+                    .switch_branch(&name, crate::git::BranchType::Local)?;
                 self.refresh_all()?;
                 self.message = Some(format!("Switched to: {}", name));
             }
@@ -4754,13 +4928,20 @@ impl App {
                 if !self.input_buffer.is_empty() {
                     if let Some(issue_number) = self.comment_issue_number.take() {
                         if self.remote_operation.is_none() {
-                            self.remote_operation = Some(RemoteOperation::IssueComment(issue_number));
+                            self.remote_operation =
+                                Some(RemoteOperation::IssueComment(issue_number));
                             let sender = self.async_sender.clone();
                             let repo_path = self.repo_path.clone();
                             let comment_body = self.input_buffer.clone();
                             thread::spawn(move || {
                                 let output = std::process::Command::new("gh")
-                                    .args(["issue", "comment", &issue_number.to_string(), "--body", &comment_body])
+                                    .args([
+                                        "issue",
+                                        "comment",
+                                        &issue_number.to_string(),
+                                        "--body",
+                                        &comment_body,
+                                    ])
                                     .current_dir(&repo_path)
                                     .output();
 
@@ -4775,7 +4956,8 @@ impl App {
                                     }
                                     Err(e) => Err(format!("Failed to run gh: {}", e)),
                                 };
-                                let _ = sender.send(AsyncLoadResult::RemoteOperationComplete(result));
+                                let _ =
+                                    sender.send(AsyncLoadResult::RemoteOperationComplete(result));
                             });
                         }
                     }

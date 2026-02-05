@@ -28,7 +28,9 @@ impl BranchGraph {
         F: Fn(&BranchInfo, &BranchInfo) -> bool,
     {
         if branches.is_empty() {
-            return Self { entries: Vec::new() };
+            return Self {
+                entries: Vec::new(),
+            };
         }
 
         let n = branches.len();
@@ -100,9 +102,7 @@ impl BranchGraph {
         }
 
         // Find root branches (no parent) and calculate depths
-        let roots: Vec<usize> = (0..n)
-            .filter(|&i| entries[i].parent.is_none())
-            .collect();
+        let roots: Vec<usize> = (0..n).filter(|&i| entries[i].parent.is_none()).collect();
 
         for root_idx in roots {
             calculate_depth(&mut entries, root_idx, 0);
@@ -123,7 +123,11 @@ impl BranchGraph {
         // Sort by commit time (most recent first)
         let mut display_order: Vec<usize> = (0..n).collect();
         display_order.sort_by(|&a, &b| {
-            entries[b].branch.last_commit.time.cmp(&entries[a].branch.last_commit.time)
+            entries[b]
+                .branch
+                .last_commit
+                .time
+                .cmp(&entries[a].branch.last_commit.time)
         });
 
         // Column assignment strategy:
@@ -131,17 +135,17 @@ impl BranchGraph {
         // - Each branch tries to reuse its parent's column (FF relationship)
         // - If parent doesn't have a column yet, create one and share it with parent
         // - If parent already has a column taken by another child (diverged), create new column
-        
+
         let mut branch_column: Vec<Option<usize>> = vec![None; n];
         let mut next_column: usize = 0;
         // Track which branch currently "owns" each column
         let mut column_owner: Vec<Option<usize>> = Vec::new();
-        
+
         for &branch_idx in &display_order {
             let parent_idx = entries[branch_idx].parent;
-            
+
             let my_col: usize;
-            
+
             if let Some(p_idx) = parent_idx {
                 if let Some(parent_col) = branch_column[p_idx] {
                     // Parent already has a column
@@ -166,9 +170,9 @@ impl BranchGraph {
                 my_col = next_column;
                 next_column += 1;
             }
-            
+
             branch_column[branch_idx] = Some(my_col);
-            
+
             // Update column ownership
             if my_col >= column_owner.len() {
                 column_owner.resize(my_col + 1, None);
@@ -181,9 +185,9 @@ impl BranchGraph {
         if max_columns == 0 {
             return;
         }
-        
+
         let mut active_columns: Vec<bool> = vec![false; max_columns];
-        
+
         // Find last display position for each column
         let mut column_last_pos: Vec<usize> = vec![0; max_columns];
         for (pos, &branch_idx) in display_order.iter().enumerate() {
@@ -191,13 +195,13 @@ impl BranchGraph {
                 column_last_pos[col] = pos;
             }
         }
-        
+
         for (pos, &branch_idx) in display_order.iter().enumerate() {
             let my_col = branch_column[branch_idx].unwrap_or(0);
-            
+
             // Activate this column
             active_columns[my_col] = true;
-            
+
             // Build prefix
             let mut prefix = String::new();
             for col in 0..max_columns {
@@ -210,13 +214,13 @@ impl BranchGraph {
                 }
                 prefix.push(' ');
             }
-            
+
             // Trim and format
             entries[branch_idx].graph_prefix = prefix.trim_end().to_string();
             if !entries[branch_idx].graph_prefix.is_empty() {
                 entries[branch_idx].graph_prefix.push(' ');
             }
-            
+
             // Deactivate column if this is its last branch in display order
             if column_last_pos[my_col] == pos {
                 active_columns[my_col] = false;
@@ -228,9 +232,13 @@ impl BranchGraph {
     pub fn sorted_entries(&self) -> Vec<&BranchGraphEntry> {
         let mut order: Vec<usize> = (0..self.entries.len()).collect();
         order.sort_by(|&a, &b| {
-            self.entries[b].branch.last_commit.time.cmp(&self.entries[a].branch.last_commit.time)
+            self.entries[b]
+                .branch
+                .last_commit
+                .time
+                .cmp(&self.entries[a].branch.last_commit.time)
         });
-        
+
         order.iter().map(|&idx| &self.entries[idx]).collect()
     }
 }

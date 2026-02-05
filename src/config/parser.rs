@@ -20,6 +20,8 @@ struct Parser<'a> {
     input: &'a str,
     chars: std::iter::Peekable<std::str::CharIndices<'a>>,
     current_table: Vec<String>,
+    /// For [[array]] tables: (path, current table being built)
+    current_array_table: Option<(Vec<String>, HashMap<String, Value>)>,
 }
 
 impl<'a> Parser<'a> {
@@ -28,6 +30,7 @@ impl<'a> Parser<'a> {
             input,
             chars: input.char_indices().peekable(),
             current_table: Vec::new(),
+            current_array_table: None,
         }
     }
 
@@ -42,24 +45,66 @@ impl<'a> Parser<'a> {
             }
 
             if self.peek() == Some('[') {
-                self.current_table = self.parse_table_header()?;
+                // Check if it's an array table [[name]]
+                self.advance(); // consume first '['
+                if self.peek() == Some('[') {
+                    // Array table [[name]]
+                    self.advance(); // consume second '['
+
+                    // Flush previous array table entry if any
+                    self.flush_array_table(&mut root);
+
+                    let path = self.parse_array_table_path()?;
+                    self.current_array_table = Some((path, HashMap::new()));
+                    self.current_table = Vec::new();
+                } else {
+                    // Regular table [name]
+                    // Flush previous array table entry if any
+                    self.flush_array_table(&mut root);
+
+                    let path = self.parse_table_path()?;
+                    self.current_table = path;
+                    self.current_array_table = None;
+                }
             } else if self
                 .peek()
                 .map(|c| c.is_alphanumeric() || c == '_' || c == '"')
                 .unwrap_or(false)
             {
                 let (key, value) = self.parse_key_value()?;
-                self.insert_value(&mut root, &self.current_table.clone(), &key, value);
+                if let Some((_, ref mut table)) = self.current_array_table {
+                    // Insert into current array table entry
+                    table.insert(key, value);
+                } else {
+                    self.insert_value(&mut root, &self.current_table.clone(), &key, value);
+                }
             } else {
                 self.advance();
             }
         }
 
+        // Flush any remaining array table entry
+        self.flush_array_table(&mut root);
+
         Ok(root)
     }
 
-    fn parse_table_header(&mut self) -> Result<Vec<String>> {
-        self.expect('[')?;
+    fn flush_array_table(&mut self, root: &mut HashMap<String, Value>) {
+        if let Some((path, table)) = self.current_array_table.take() {
+            if !path.is_empty() {
+                let key = &path[0];
+                let arr = root
+                    .entry(key.clone())
+                    .or_insert_with(|| Value::Array(Vec::new()));
+                if let Value::Array(ref mut vec) = arr {
+                    vec.push(Value::Table(table));
+                }
+            }
+        }
+    }
+
+    fn parse_table_path(&mut self) -> Result<Vec<String>> {
+        // First '[' already consumed
         let mut path = Vec::new();
 
         loop {
@@ -77,6 +122,34 @@ impl<'a> Parser<'a> {
                     break;
                 }
                 _ => return Err(Error::Config("Invalid table header".to_string())),
+            }
+        }
+
+        self.skip_to_newline();
+        Ok(path)
+    }
+
+    fn parse_array_table_path(&mut self) -> Result<Vec<String>> {
+        // First '[[' already consumed
+        let mut path = Vec::new();
+
+        loop {
+            self.skip_whitespace();
+            let key = self.parse_key()?;
+            path.push(key);
+
+            self.skip_whitespace();
+            match self.peek() {
+                Some('.') => {
+                    self.advance();
+                }
+                Some(']') => {
+                    self.advance();
+                    // Expect second ']'
+                    self.expect(']')?;
+                    break;
+                }
+                _ => return Err(Error::Config("Invalid array table header".to_string())),
             }
         }
 
@@ -281,7 +354,12 @@ impl<'a> Parser<'a> {
                 break;
             }
 
-            let (key, value) = self.parse_key_value()?;
+            // Parse key = value without consuming newline
+            let key = self.parse_key()?;
+            self.skip_whitespace();
+            self.expect('=')?;
+            self.skip_whitespace();
+            let value = self.parse_value()?;
             table.insert(key, value);
 
             self.skip_whitespace();
@@ -381,6 +459,39 @@ impl<'a> Parser<'a> {
                 break;
             }
             self.advance();
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_array_table() {
+        let input = r#"
+auto_fetch_interval = 300
+
+[[columns]]
+width = 0.180
+panels = [
+  { type = "files", height = 0.175 },
+]
+
+[[columns]]
+width = 0.345
+panels = [
+  { type = "commits", height = 0.300 },
+]
+"#;
+        let result = parse(input).unwrap();
+        println!("Parsed: {:?}", result);
+        
+        assert!(result.contains_key("columns"));
+        if let Some(Value::Array(columns)) = result.get("columns") {
+            assert_eq!(columns.len(), 2);
+        } else {
+            panic!("columns should be an array");
         }
     }
 }

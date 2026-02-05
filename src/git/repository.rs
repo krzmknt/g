@@ -113,15 +113,25 @@ impl Repository {
                 Ok(upstream_branch) => {
                     let local_oid = branch.get().target().unwrap();
                     let upstream_oid = upstream_branch.get().target().unwrap();
-                    let (a, b) = self.repo
+                    let (a, b) = self
+                        .repo
                         .graph_ahead_behind(local_oid, upstream_oid)
                         .unwrap_or((0, 0));
-                    let upstream_name = upstream_branch.name().ok().flatten().unwrap_or("").to_string();
+                    let upstream_name = upstream_branch
+                        .name()
+                        .ok()
+                        .flatten()
+                        .unwrap_or("")
+                        .to_string();
                     let upstream_short_id = upstream_oid.to_string()[..7].to_string();
-                    (a, b, Some(UpstreamInfo {
-                        name: upstream_name,
-                        short_id: upstream_short_id,
-                    }))
+                    (
+                        a,
+                        b,
+                        Some(UpstreamInfo {
+                            name: upstream_name,
+                            short_id: upstream_short_id,
+                        }),
+                    )
                 }
                 Err(_) => (0, 0, None),
             };
@@ -204,15 +214,17 @@ impl Repository {
 
     pub fn delete_branch(&self, name: &str, force: bool) -> Result<()> {
         // Try to find as local branch first, then as remote tracking branch
-        let (mut branch, is_remote) = if let Ok(b) = self.repo.find_branch(name, git2::BranchType::Local) {
-            (b, false)
-        } else if let Ok(b) = self.repo.find_branch(name, git2::BranchType::Remote) {
-            (b, true)
-        } else {
-            return Err(Error::Git(git2::Error::from_str(
-                &format!("Branch '{}' not found", name),
-            )));
-        };
+        let (mut branch, is_remote) =
+            if let Ok(b) = self.repo.find_branch(name, git2::BranchType::Local) {
+                (b, false)
+            } else if let Ok(b) = self.repo.find_branch(name, git2::BranchType::Remote) {
+                (b, true)
+            } else {
+                return Err(Error::Git(git2::Error::from_str(&format!(
+                    "Branch '{}' not found",
+                    name
+                ))));
+            };
 
         if is_remote {
             // Remote tracking branch - just delete it
@@ -420,7 +432,6 @@ impl Repository {
         Ok(())
     }
 
-
     /// Reset HEAD to a specific commit
     /// reset_type: "soft" (keep staged), "mixed" (keep working dir), "hard" (discard all)
     pub fn reset_to_commit(&self, commit_id: &str, reset_type: &str) -> Result<()> {
@@ -624,6 +635,25 @@ impl Repository {
 
     pub fn diff_unstaged(&self) -> Result<DiffInfo> {
         let diff = self.repo.diff_index_to_workdir(None, None)?;
+        Self::parse_diff(&diff)
+    }
+
+    /// Get the diff for a specific commit (comparing to its parent)
+    pub fn diff_commit(&self, commit_id: &str) -> Result<DiffInfo> {
+        let obj = self.repo.revparse_single(commit_id)?;
+        let commit = obj.peel_to_commit()?;
+        let commit_tree = commit.tree()?;
+
+        // Get parent tree (None for root commit)
+        let parent_tree = if commit.parent_count() > 0 {
+            Some(commit.parent(0)?.tree()?)
+        } else {
+            None
+        };
+
+        let diff = self
+            .repo
+            .diff_tree_to_tree(parent_tree.as_ref(), Some(&commit_tree), None)?;
         Self::parse_diff(&diff)
     }
 
@@ -1046,7 +1076,6 @@ impl Repository {
         Ok(())
     }
 
-
     /// Push current branch to remote using git command
     pub fn push(&self, remote_name: &str) -> Result<()> {
         let output = std::process::Command::new("git")
@@ -1428,11 +1457,13 @@ impl Repository {
         }
     }
 
-
     /// Get the set of file paths changed in the given commits
-    pub fn files_changed_in_commits(&self, commit_ids: &[String]) -> Result<std::collections::HashSet<String>> {
+    pub fn files_changed_in_commits(
+        &self,
+        commit_ids: &[String],
+    ) -> Result<std::collections::HashSet<String>> {
         let mut files = std::collections::HashSet::new();
-        
+
         for commit_id in commit_ids {
             if let Ok(obj) = self.repo.revparse_single(commit_id) {
                 if let Ok(commit) = obj.peel_to_commit() {
@@ -1442,11 +1473,16 @@ impl Repository {
                     } else {
                         None
                     };
-                    
+
                     if let Ok(tree) = commit.tree() {
-                        if let Ok(diff) = self.repo.diff_tree_to_tree(parent_tree.as_ref(), Some(&tree), None) {
+                        if let Ok(diff) =
+                            self.repo
+                                .diff_tree_to_tree(parent_tree.as_ref(), Some(&tree), None)
+                        {
                             for delta in diff.deltas() {
-                                if let Some(path) = delta.new_file().path().or_else(|| delta.old_file().path()) {
+                                if let Some(path) =
+                                    delta.new_file().path().or_else(|| delta.old_file().path())
+                                {
                                     files.insert(path.to_string_lossy().to_string());
                                 }
                             }
@@ -1455,7 +1491,7 @@ impl Repository {
                 }
             }
         }
-        
+
         Ok(files)
     }
 
@@ -1527,7 +1563,11 @@ impl Repository {
 
     /// Format refs for display: remove HEAD/xxx/HEAD, show local -> remote tracking
     fn format_refs_for_display(refs_str: &str, remotes: &[String]) -> Vec<String> {
-        let raw_refs: Vec<&str> = refs_str.split(", ").map(|s| s.trim()).filter(|s| !s.is_empty()).collect();
+        let raw_refs: Vec<&str> = refs_str
+            .split(", ")
+            .map(|s| s.trim())
+            .filter(|s| !s.is_empty())
+            .collect();
 
         let mut local_branches: Vec<String> = Vec::new();
         let mut remote_branches: Vec<&str> = Vec::new();
@@ -1544,9 +1584,9 @@ impl Repository {
                 other_refs.push(r);
             } else {
                 // Check if this is a remote tracking branch (starts with any remote name + /)
-                let is_remote = remotes.iter().any(|remote| {
-                    r.starts_with(&format!("{}/", remote))
-                });
+                let is_remote = remotes
+                    .iter()
+                    .any(|remote| r.starts_with(&format!("{}/", remote)));
 
                 if is_remote {
                     // Skip remote/HEAD
@@ -1574,9 +1614,9 @@ impl Repository {
         for local in &local_branches {
             // Look for matching remote: <remote>/<local> for any remote
             let matching_remote = remote_branches.iter().find(|&&r| {
-                remotes.iter().any(|remote_name| {
-                    r == format!("{}/{}", remote_name, local)
-                })
+                remotes
+                    .iter()
+                    .any(|remote_name| r == format!("{}/{}", remote_name, local))
             });
 
             if let Some(&remote) = matching_remote {
@@ -1644,10 +1684,10 @@ impl Repository {
         for line in stdout.lines() {
             let chars: Vec<char> = line.chars().collect();
             let mut graph_end: Option<usize> = None;
-            
+
             // Find the first occurrence of 40 hex characters (commit hash)
             for i in 0..chars.len().saturating_sub(40) {
-                let potential_hash: String = chars[i..i+40].iter().collect();
+                let potential_hash: String = chars[i..i + 40].iter().collect();
                 if potential_hash.chars().all(|c| c.is_ascii_hexdigit()) {
                     graph_end = Some(i);
                     break;
@@ -1660,8 +1700,12 @@ impl Repository {
                     lines.push(GraphLine::Connector(line.to_string()));
                 }
                 Some(graph_end) => {
-                    let mut graph_chars: String = chars[..graph_end].iter().collect::<String>().trim_end().to_string();
-                    
+                    let mut graph_chars: String = chars[..graph_end]
+                        .iter()
+                        .collect::<String>()
+                        .trim_end()
+                        .to_string();
+
                     // Ensure there's a space before the commit hash when graph ends with | or similar
                     // e.g., "* |" should stay as "* |" not "* |" -> "* | " for proper spacing
                     if !graph_chars.is_empty() {
@@ -1680,9 +1724,9 @@ impl Repository {
                             }
                         }
                     }
-                    
+
                     let data_part: String = chars[graph_end..].iter().collect();
-                    
+
                     let parts: Vec<&str> = data_part.split('|').collect();
                     if parts.len() < 7 {
                         continue;
@@ -1733,27 +1777,29 @@ impl Repository {
 
         let mut result = Vec::new();
         let mut is_first_commit = true;
-        
+
         for line in lines {
             match &line {
                 GraphLine::Commit(commit) => {
                     // Check if this is a leaf commit (not a parent of any other commit)
                     let short_id = &commit.id[..7.min(commit.id.len())];
-                    let is_leaf = !parent_ids.contains(short_id) && !parent_ids.contains(&commit.id);
-                    
+                    let is_leaf =
+                        !parent_ids.contains(short_id) && !parent_ids.contains(&commit.id);
+
                     // Add blank line before leaf commits (except the first commit)
                     if is_leaf && !is_first_commit {
                         // Create a connector line preserving | but replacing * with space
-                        let blank_graph: String = commit.graph_chars
+                        let blank_graph: String = commit
+                            .graph_chars
                             .chars()
                             .map(|c| match c {
-                                '|' => '|',  // Keep vertical lines
-                                _ => ' ',    // Replace *, \, /, etc. with space
+                                '|' => '|', // Keep vertical lines
+                                _ => ' ',   // Replace *, \, /, etc. with space
                             })
                             .collect();
                         result.push(GraphLine::Connector(blank_graph));
                     }
-                    
+
                     result.push(line);
                     is_first_commit = false;
                 }
@@ -1765,7 +1811,6 @@ impl Repository {
 
         Ok(result)
     }
-
 
     // Fallback graph implementation using git2
     fn log_graph_simple(&self, max_count: usize) -> Result<Vec<GraphLine>> {
@@ -1879,7 +1924,7 @@ impl Repository {
         // Build the commit line
         for i in 0..state_len {
             let slot = &state[i];
-            
+
             if i == col {
                 chars.push('*');
             } else if merging_cols.contains(&i) {

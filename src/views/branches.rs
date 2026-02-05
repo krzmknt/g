@@ -17,11 +17,11 @@ pub struct BranchesView {
 }
 
 impl BranchesView {
-    pub fn new() -> Self {
+    pub fn new(show_remote: bool) -> Self {
         Self {
             local: Vec::new(),
             remote: Vec::new(),
-            show_remote: true,
+            show_remote,
             selected: 0,
             offset: 0,
             h_offset: 0,
@@ -108,14 +108,16 @@ impl BranchesView {
         if self.show_remote {
             // Filter out remote branches that are tracked by local branches
             // This matches the logic in build_display_items() for consistency
-            let tracked_remotes: std::collections::HashSet<&str> = self.local
+            let tracked_remotes: std::collections::HashSet<&str> = self
+                .local
                 .iter()
                 .filter_map(|b| b.upstream.as_ref().map(|u| u.name.as_str()))
                 .collect();
 
             branches.extend(
-                self.remote.iter()
-                    .filter(|b| !tracked_remotes.contains(b.name.as_str()))
+                self.remote
+                    .iter()
+                    .filter(|b| !tracked_remotes.contains(b.name.as_str())),
             );
         }
         branches
@@ -127,14 +129,18 @@ impl BranchesView {
         if self.show_remote {
             // Filter out remote branches that are tracked by local branches
             // This matches the logic in build_display_items() for consistency
-            let tracked_remotes: std::collections::HashSet<&str> = self.local
+            let tracked_remotes: std::collections::HashSet<&str> = self
+                .local
                 .iter()
                 .filter_map(|b| b.upstream.as_ref().map(|u| u.name.as_str()))
                 .collect();
 
-            count + self.remote.iter()
-                .filter(|b| !tracked_remotes.contains(b.name.as_str()))
-                .count()
+            count
+                + self
+                    .remote
+                    .iter()
+                    .filter(|b| !tracked_remotes.contains(b.name.as_str()))
+                    .count()
         } else {
             count
         }
@@ -274,7 +280,11 @@ impl BranchesView {
         self.max_content_width = display_items
             .iter()
             .map(|item| {
-                let upstream_len = item.upstream_info.as_ref().map(|(s, _)| s.chars().count()).unwrap_or(0);
+                let upstream_len = item
+                    .upstream_info
+                    .as_ref()
+                    .map(|(s, _)| s.chars().count())
+                    .unwrap_or(0);
                 item.line.chars().count() + upstream_len
             })
             .max()
@@ -291,7 +301,12 @@ impl BranchesView {
             }
         }
 
-        for (i, item) in display_items.iter().skip(self.offset).take(height).enumerate() {
+        for (i, item) in display_items
+            .iter()
+            .skip(self.offset)
+            .take(height)
+            .enumerate()
+        {
             let y = inner.y + i as u16;
             let is_selected = self.selected == self.offset + i;
             let is_search_match = self.search_results.contains(&(self.offset + i));
@@ -337,7 +352,13 @@ impl BranchesView {
                     } else {
                         Style::new().fg(upstream_color)
                     };
-                    buf.set_string_truncated(inner.x, y, &display_upstream, content_width, upstream_style);
+                    buf.set_string_truncated(
+                        inner.x,
+                        y,
+                        &display_upstream,
+                        content_width,
+                        upstream_style,
+                    );
                 }
             } else {
                 // Main line is at least partially visible
@@ -361,7 +382,7 @@ impl BranchesView {
                             y,
                             upstream,
                             remaining_width as u16,
-                            upstream_style
+                            upstream_style,
                         );
                     }
                 }
@@ -384,7 +405,8 @@ impl BranchesView {
         let show_upstream = self.show_remote;
 
         // Collect tracked remote branch names to filter them out (only needed in detailed view)
-        let tracked_remotes: std::collections::HashSet<&str> = self.local
+        let tracked_remotes: std::collections::HashSet<&str> = self
+            .local
             .iter()
             .filter_map(|b| b.upstream.as_ref().map(|u| u.name.as_str()))
             .collect();
@@ -406,7 +428,12 @@ impl BranchesView {
         items
     }
 
-    fn branch_to_display_item(&self, branch: &BranchInfo, theme: &Theme, show_upstream: bool) -> DisplayItem {
+    fn branch_to_display_item(
+        &self,
+        branch: &BranchInfo,
+        theme: &Theme,
+        show_upstream: bool,
+    ) -> DisplayItem {
         let color = match branch.branch_type {
             BranchType::Local if branch.is_head => theme.branch_current,
             BranchType::Local => theme.branch_local,
@@ -427,7 +454,10 @@ impl BranchesView {
         // Add upstream tracking info for local branches (only when show_upstream is true)
         let upstream_info = if show_upstream {
             if let Some(ref upstream) = branch.upstream {
-                Some((format!(" -> {} {}", upstream.short_id, upstream.name), theme.branch_remote))
+                Some((
+                    format!(" -> {} {}", upstream.short_id, upstream.name),
+                    theme.branch_remote,
+                ))
             } else {
                 None
             }
@@ -435,7 +465,11 @@ impl BranchesView {
             None
         };
 
-        DisplayItem { line, color, upstream_info }
+        DisplayItem {
+            line,
+            color,
+            upstream_info,
+        }
     }
 }
 

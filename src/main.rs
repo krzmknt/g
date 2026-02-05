@@ -32,17 +32,17 @@ fn main() {
 
         // Show user-friendly error messages for common git errors
         let message = match &e {
-            Error::Git(git_err) => {
-                match git_err.code() {
-                    git2::ErrorCode::NotFound => {
-                        "Not a git repository.\n\nRun 'git init' to initialize a new repository.".to_string()
-                    }
-                    git2::ErrorCode::UnbornBranch => {
-                        "Repository has no commits yet.\n\nCreate your first commit to use g.".to_string()
-                    }
-                    _ => format!("{}", e),
+            Error::Git(git_err) => match git_err.code() {
+                git2::ErrorCode::NotFound => {
+                    "Not a git repository.\n\nRun 'git init' to initialize a new repository."
+                        .to_string()
                 }
-            }
+                git2::ErrorCode::UnbornBranch => {
+                    "Repository has no commits yet.\n\nCreate your first commit to use g."
+                        .to_string()
+                }
+                _ => format!("{}", e),
+            },
             _ => format!("{}", e),
         };
 
