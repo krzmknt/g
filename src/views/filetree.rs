@@ -84,6 +84,15 @@ impl FileTreeView {
         if !entry.is_dir {
             return self.matches_filter(&entry.path);
         }
+        // For directories whose children haven't been loaded yet (lazy loading),
+        // check if any filter path starts with this directory's prefix
+        let dir_prefix = format!("{}/", entry.path);
+        if let Some(ref paths) = self.filter_paths {
+            if paths.iter().any(|p| p.starts_with(&dir_prefix)) {
+                return true;
+            }
+        }
+        // Also check already-loaded children recursively
         for child in &entry.children {
             if child.is_dir {
                 if self.dir_has_matching_children(child) {
