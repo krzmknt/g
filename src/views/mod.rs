@@ -23,7 +23,7 @@ pub use branches::BranchesView;
 pub use commits::{CommitsView, CommitsViewMode};
 pub use conflict::ConflictView;
 pub use diff::{DiffMode, DiffView, PreviewType};
-pub use filetree::FileTreeView;
+pub use filetree::{FileTreeView, FileViewMode};
 pub use issues::IssuesView;
 pub use loading::{LoadingState, DEFAULT_TIMEOUT, SPINNER_FRAMES};
 pub use menu::{MenuView, PanelType};

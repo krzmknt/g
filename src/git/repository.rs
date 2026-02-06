@@ -1457,6 +1457,81 @@ impl Repository {
         }
     }
 
+    /// Recursively collect all files (non-directories) in the repo, excluding gitignored files.
+    /// Returns a flat list of FileTreeEntry with full relative paths.
+    pub fn file_tree_flat(&self) -> Result<Vec<FileTreeEntry>> {
+        let statuses = self.status()?;
+        let status_map: std::collections::HashMap<String, FileTreeStatus> = statuses
+            .iter()
+            .map(|e| {
+                let status = if e.unstaged == FileStatus::Untracked {
+                    FileTreeStatus::Untracked
+                } else if e.unstaged == FileStatus::Deleted || e.staged == FileStatus::Deleted {
+                    FileTreeStatus::Deleted
+                } else if e.staged == FileStatus::Added {
+                    FileTreeStatus::Added
+                } else if e.unstaged.is_changed() || e.staged.is_changed() {
+                    FileTreeStatus::Modified
+                } else {
+                    FileTreeStatus::Modified
+                };
+                (e.path.clone(), status)
+            })
+            .collect();
+
+        let mut entries = Vec::new();
+        self.collect_files_recursive("", &status_map, &mut entries)?;
+        entries.sort_by(|a, b| a.path.to_lowercase().cmp(&b.path.to_lowercase()));
+        Ok(entries)
+    }
+
+    fn collect_files_recursive(
+        &self,
+        relative_path: &str,
+        status_map: &std::collections::HashMap<String, FileTreeStatus>,
+        result: &mut Vec<FileTreeEntry>,
+    ) -> Result<()> {
+        let full_path = if relative_path.is_empty() {
+            self.path.clone()
+        } else {
+            self.path.join(relative_path)
+        };
+
+        if let Ok(read_dir) = std::fs::read_dir(&full_path) {
+            for entry in read_dir.flatten() {
+                let name = entry.file_name().to_string_lossy().to_string();
+
+                if name == ".git" {
+                    continue;
+                }
+
+                let entry_relative = if relative_path.is_empty() {
+                    name.clone()
+                } else {
+                    format!("{}/{}", relative_path, name)
+                };
+
+                let is_ignored = self.repo.is_path_ignored(&entry_relative).unwrap_or(false);
+                if is_ignored {
+                    continue;
+                }
+
+                if entry.path().is_dir() {
+                    self.collect_files_recursive(&entry_relative, status_map, result)?;
+                } else {
+                    let status = status_map.get(&entry_relative).copied();
+                    result.push(FileTreeEntry::new_file(
+                        entry_relative.clone(),
+                        entry_relative,
+                        status,
+                    ));
+                }
+            }
+        }
+
+        Ok(())
+    }
+
     /// Get the set of file paths changed in the given commits
     pub fn files_changed_in_commits(
         &self,

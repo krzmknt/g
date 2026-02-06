@@ -7,8 +7,9 @@ use crate::input::{
 use crate::tui::{Buffer, Color, Rect, Style, Terminal};
 use crate::views::{
     ActionsView, BlameView, BranchesView, CommitsView, CommitsViewMode, ConflictView, DiffMode,
-    DiffView, FileTreeView, IssuesView, MenuView, PanelType, PullRequestsView, ReleasesView,
-    RemotesView, Section, StashView, StatusView, SubmodulesView, TagsView, WorktreeView,
+    DiffView, FileTreeView, FileViewMode, IssuesView, MenuView, PanelType, PullRequestsView,
+    ReleasesView, RemotesView, Section, StashView, StatusView, SubmodulesView, TagsView,
+    WorktreeView,
 };
 use crate::widgets::{Block, Borders, Widget};
 use std::collections::HashSet;
@@ -263,7 +264,7 @@ impl App {
         }
 
         let branches_view = BranchesView::new(config.view_defaults.branches_show_remote);
-        let filetree_view = FileTreeView::new(config.view_defaults.files_show_ignored);
+        let filetree_view = FileTreeView::new();
 
         // Create channel for async loading
         let (async_sender, async_receiver) = mpsc::channel();
@@ -901,7 +902,7 @@ impl App {
             self.refreshing_filetree = true;
             let sender = self.async_sender.clone();
             let repo_path = self.repo_path.clone();
-            let show_ignored = self.filetree_view.show_ignored;
+            let show_ignored = self.filetree_view.show_ignored();
             thread::spawn(move || {
                 let result = match Repository::open(&repo_path) {
                     Ok(repo) => repo.file_tree(show_ignored).map_err(|e| e.to_string()),
@@ -970,8 +971,12 @@ impl App {
     }
 
     fn refresh_filetree(&mut self) -> Result<()> {
-        let tree = self.repo.file_tree(self.filetree_view.show_ignored)?;
+        let tree = self.repo.file_tree(self.filetree_view.show_ignored())?;
         self.filetree_view.update(tree);
+        if self.filetree_view.view_mode == FileViewMode::Flat {
+            let flat = self.repo.file_tree_flat()?;
+            self.filetree_view.update_flat(flat);
+        }
         Ok(())
     }
 
@@ -1813,11 +1818,9 @@ impl App {
                     PanelType::Worktrees => &[],
                     PanelType::Submodules => &[("u", "update")],
                     PanelType::Blame => &[("j/k", "scroll")],
-                    PanelType::Files => &[
-                        ("Space/Enter", "open"),
-                        ("v", "show ignored"),
-                        ("b", "blame"),
-                    ],
+                    PanelType::Files => {
+                        &[("Space/Enter", "open"), ("v", "view mode"), ("b", "blame")]
+                    }
                     PanelType::Conflicts => &[("o", "use ours"), ("t", "use theirs")],
                     PanelType::PullRequests => &[("M", "merge"), ("d", "close"), ("R", "reload")],
                     PanelType::Issues => &[
@@ -3962,12 +3965,24 @@ impl App {
             }
 
             KeyCode::Char('v') if self.focused_panel == PanelType::Files => {
-                self.filetree_view.toggle_show_ignored();
-                self.refresh_filetree()?;
-                let mode_name = if self.filetree_view.show_ignored {
-                    "showing ignored files"
-                } else {
-                    "hiding ignored files"
+                self.filetree_view.cycle_view_mode();
+                match self.filetree_view.view_mode {
+                    FileViewMode::Flat => {
+                        if let Ok(flat) = self.repo.file_tree_flat() {
+                            self.filetree_view.update_flat(flat);
+                        }
+                    }
+                    FileViewMode::TreeWithIgnored => {
+                        self.refresh_filetree()?;
+                    }
+                    FileViewMode::Tree => {
+                        self.refresh_filetree()?;
+                    }
+                }
+                let mode_name = match self.filetree_view.view_mode {
+                    FileViewMode::Tree => "tree",
+                    FileViewMode::Flat => "flat",
+                    FileViewMode::TreeWithIgnored => "tree +ignored",
                 };
                 self.message = Some(format!("Files view: {}", mode_name));
             }
@@ -4851,7 +4866,7 @@ impl App {
                             // Lazy load children for this directory
                             let children = self
                                 .repo
-                                .file_tree_dir(&load_path, self.filetree_view.show_ignored)?;
+                                .file_tree_dir(&load_path, self.filetree_view.show_ignored())?;
                             self.filetree_view.load_children(&path, children);
                         }
                     } else {
