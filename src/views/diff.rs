@@ -40,6 +40,7 @@ pub struct PullRequestPreview {
     pub body: String,
     pub url: String,
     pub created_at: String,
+    pub mergeable: String,
 }
 
 impl From<&PullRequestInfo> for PullRequestPreview {
@@ -57,6 +58,7 @@ impl From<&PullRequestInfo> for PullRequestPreview {
             body: pr.body.clone(),
             url: pr.url.clone(),
             created_at: pr.created_at.clone(),
+            mergeable: pr.mergeable.clone(),
         }
     }
 }
@@ -1400,6 +1402,17 @@ impl DiffView {
             format!("State: {}", state_str),
             Style::new().fg(state_color),
         ));
+        if !pr.mergeable.is_empty() && pr.state == "OPEN" {
+            let (mergeable_label, mergeable_color) = match pr.mergeable.as_str() {
+                "MERGEABLE" => ("Mergeable", theme.diff_add),
+                "CONFLICTING" => ("Conflicting", theme.diff_remove),
+                _ => ("Unknown", theme.border_unfocused),
+            };
+            lines.push((
+                format!("Merge: {}", mergeable_label),
+                Style::new().fg(mergeable_color),
+            ));
+        }
         lines.push((
             format!("Author: {}", pr.author),
             Style::new().fg(theme.foreground),

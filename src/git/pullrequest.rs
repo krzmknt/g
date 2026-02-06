@@ -22,4 +22,6 @@ pub struct PullRequestInfo {
     pub body: String,
     #[serde(default)]
     pub url: String,
+    #[serde(default)]
+    pub mergeable: String, // "MERGEABLE", "CONFLICTING", "UNKNOWN"
 }

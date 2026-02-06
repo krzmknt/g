@@ -2870,8 +2870,8 @@ impl App {
         let mouse_x_pct = x as f32 / width as f32;
         let mouse_y_pct = (y - main_top) as f32 / main_height as f32;
 
-        const COL_THRESHOLD: f32 = 0.008;
-        const PANEL_THRESHOLD: f32 = 0.012;
+        const COL_THRESHOLD: f32 = 0.012;
+        const PANEL_THRESHOLD: f32 = 0.025;
 
         // First, check for intersections (T or cross junctions)
         // An intersection occurs where a column border meets panel borders
@@ -2960,8 +2960,12 @@ impl App {
                     panel_y += panel.height;
 
                     // Check if mouse is near this panel's bottom edge (but not the last panel)
+                    // Shift detection slightly up to align with border between panels
                     if panel_idx < column.panels.len() - 1 {
-                        if (mouse_y_pct - panel_y).abs() < PANEL_THRESHOLD {
+                        // Check range from (panel_y - threshold) to (panel_y + threshold/2)
+                        // This shifts the detection zone up to match the visual border
+                        let dist = mouse_y_pct - panel_y;
+                        if dist > -PANEL_THRESHOLD && dist < PANEL_THRESHOLD / 2.0 {
                             return Some(DragState {
                                 drag_type: DragType::PanelBorder { col_idx, panel_idx },
                             });
@@ -3031,7 +3035,8 @@ impl App {
                 let combined_height =
                     column.panels[panel_idx].height + column.panels[panel_idx + 1].height;
 
-                let new_height = (mouse_y_pct - panel_start).clamp(0.1, combined_height - 0.1);
+                let min_height = 0.03; // 3% minimum
+                let new_height = (mouse_y_pct - panel_start).clamp(min_height, combined_height - min_height);
                 let next_height = combined_height - new_height;
 
                 column.panels[panel_idx].height = new_height;
@@ -3069,6 +3074,7 @@ impl App {
                 self.config.layout.columns[col_idx + 1].width = next_width;
 
                 // Resize left column's panel heights (if applicable)
+                let min_height = 0.03; // 3% minimum
                 if left_panel_idx != usize::MAX {
                     let column = &mut self.config.layout.columns[col_idx];
                     if left_panel_idx < column.panels.len() - 1 {
@@ -3081,7 +3087,7 @@ impl App {
                             + column.panels[left_panel_idx + 1].height;
 
                         let new_height =
-                            (mouse_y_pct - panel_start).clamp(0.1, combined_height - 0.1);
+                            (mouse_y_pct - panel_start).clamp(min_height, combined_height - min_height);
                         let next_height = combined_height - new_height;
 
                         column.panels[left_panel_idx].height = new_height;
@@ -3102,7 +3108,7 @@ impl App {
                             + column.panels[right_panel_idx + 1].height;
 
                         let new_height =
-                            (mouse_y_pct - panel_start).clamp(0.1, combined_height - 0.1);
+                            (mouse_y_pct - panel_start).clamp(min_height, combined_height - min_height);
                         let next_height = combined_height - new_height;
 
                         column.panels[right_panel_idx].height = new_height;
@@ -3150,6 +3156,11 @@ impl App {
                 content.push_str(line);
                 content.push('\n');
             }
+        }
+
+        // Remove trailing empty lines
+        while content.ends_with("\n\n") {
+            content.pop();
         }
 
         // Add column configurations
@@ -3891,6 +3902,45 @@ impl App {
                     CommitsViewMode::Graph => "graph",
                 };
                 self.message = Some(format!("Commits view: {}", mode_name));
+            }
+
+            // Switch to branch from commits pane
+            KeyCode::Char('s') if self.focused_panel == PanelType::Commits => {
+                if let Some(commit) = self.commits_view.selected_commit() {
+                    // Find first branch ref (skip tags)
+                    let branch_ref = commit.refs.iter().find(|r| {
+                        !r.starts_with("tag: ") && *r != "HEAD"
+                    });
+
+                    if let Some(ref_name) = branch_ref {
+                        // Determine if it's a remote or local branch
+                        let remotes = self.repo.remotes().unwrap_or_default();
+                        let is_remote = remotes
+                            .iter()
+                            .any(|remote| ref_name.starts_with(&format!("{}/", remote)));
+
+                        let (name, branch_type) = if is_remote {
+                            (ref_name.clone(), crate::git::BranchType::Remote)
+                        } else {
+                            (ref_name.clone(), crate::git::BranchType::Local)
+                        };
+
+                        self.repo.switch_branch(&name, branch_type)?;
+                        let display_name = if is_remote {
+                            if let Some(pos) = name.find('/') {
+                                &name[pos + 1..]
+                            } else {
+                                &name
+                            }
+                        } else {
+                            &name
+                        };
+                        self.message = Some(format!("Switched to: {}", display_name));
+                        self.refresh_all()?;
+                    } else {
+                        self.message = Some("No branch ref on this commit".to_string());
+                    }
+                }
             }
 
             KeyCode::Char('v') if self.focused_panel == PanelType::Files => {
@@ -4996,7 +5046,7 @@ fn fetch_pull_requests(repo_path: &PathBuf) -> std::result::Result<Vec<PullReque
             "pr",
             "list",
             "--json",
-            "number,title,author,state,createdAt,baseRefName,headRefName,additions,deletions,isDraft,body,url",
+            "number,title,author,state,createdAt,baseRefName,headRefName,additions,deletions,isDraft,body,url,mergeable",
             "--limit",
             "100",
         ])

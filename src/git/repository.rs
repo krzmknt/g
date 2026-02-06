@@ -917,7 +917,7 @@ impl Repository {
         let output = std::process::Command::new("gh")
             .args([
                 "pr", "list",
-                "--json", "number,title,author,state,createdAt,baseRefName,headRefName,additions,deletions,isDraft",
+                "--json", "number,title,author,state,createdAt,baseRefName,headRefName,additions,deletions,isDraft,mergeable",
                 "--limit", "100"
             ])
             .current_dir(repo_dir)
