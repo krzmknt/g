@@ -28,7 +28,7 @@ pub use diff::{DiffInfo, DiffLine, FileDiff, Hunk, LineType};
 pub use filetree::{FileTreeEntry, FileTreeStatus};
 pub use issue::{IssueComment, IssueInfo};
 pub use loggraph::{GraphCommit, GraphLine};
-pub use pullrequest::PullRequestInfo;
+pub use pullrequest::{PullRequestComment, PullRequestFile, PullRequestInfo};
 pub use release::ReleaseInfo;
 pub use repository::{MergeResult, RemoteInfo, Repository};
 pub use stash::StashEntry;

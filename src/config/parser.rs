@@ -486,7 +486,7 @@ panels = [
 "#;
         let result = parse(input).unwrap();
         println!("Parsed: {:?}", result);
-        
+
         assert!(result.contains_key("columns"));
         if let Some(Value::Array(columns)) = result.get("columns") {
             assert_eq!(columns.len(), 2);
