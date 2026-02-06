@@ -4,13 +4,21 @@ use crate::tui::{Buffer, Color, Rect, Style};
 use crate::widgets::{Block, Borders, Scrollbar, Widget};
 use std::collections::HashSet;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FileViewMode {
+    Tree,
+    Flat,
+    TreeWithIgnored,
+}
+
 pub struct FileTreeView {
     pub entries: Vec<FileTreeEntry>,
+    pub flat_file_entries: Vec<FileTreeEntry>, // All files with full paths for flat mode
     pub flat_entries: Vec<FlatEntry>,
     pub selected: usize,
     pub offset: usize,
     pub h_offset: usize,
-    pub show_ignored: bool,
+    pub view_mode: FileViewMode,
     pub max_content_width: usize, // Maximum width of content for scroll limiting
     pub view_width: usize,        // Current view width
     pub search_query: Option<String>,
@@ -32,14 +40,15 @@ pub struct FlatEntry {
 }
 
 impl FileTreeView {
-    pub fn new(show_ignored: bool) -> Self {
+    pub fn new() -> Self {
         Self {
             entries: Vec::new(),
+            flat_file_entries: Vec::new(),
             flat_entries: Vec::new(),
             selected: 0,
             offset: 0,
             h_offset: 0,
-            show_ignored,
+            view_mode: FileViewMode::Tree,
             max_content_width: 0,
             view_width: 0,
             search_query: None,
@@ -48,8 +57,17 @@ impl FileTreeView {
         }
     }
 
-    pub fn toggle_show_ignored(&mut self) {
-        self.show_ignored = !self.show_ignored;
+    pub fn show_ignored(&self) -> bool {
+        self.view_mode == FileViewMode::TreeWithIgnored
+    }
+
+    pub fn cycle_view_mode(&mut self) {
+        self.view_mode = match self.view_mode {
+            FileViewMode::Tree => FileViewMode::Flat,
+            FileViewMode::Flat => FileViewMode::TreeWithIgnored,
+            FileViewMode::TreeWithIgnored => FileViewMode::Tree,
+        };
+        self.rebuild_flat_list();
     }
 
     /// Set filter to show only files in the given paths
@@ -135,11 +153,73 @@ impl FileTreeView {
         }
     }
 
+    pub fn update_flat(&mut self, entries: Vec<FileTreeEntry>) {
+        self.flat_file_entries = entries;
+        self.rebuild_flat_list();
+        if self.selected >= self.flat_entries.len() && !self.flat_entries.is_empty() {
+            self.selected = self.flat_entries.len() - 1;
+        }
+    }
+
     fn rebuild_flat_list(&mut self) {
         self.flat_entries.clear();
-        let entries = self.entries.clone();
-        let mut is_last_stack: Vec<bool> = Vec::new();
-        self.flatten_entries(&entries, 0, &mut is_last_stack);
+        match self.view_mode {
+            FileViewMode::Tree | FileViewMode::TreeWithIgnored => {
+                let entries = self.entries.clone();
+                let mut is_last_stack: Vec<bool> = Vec::new();
+                self.flatten_entries(&entries, 0, &mut is_last_stack);
+            }
+            FileViewMode::Flat => {
+                let source = if let Some(ref paths) = self.filter_paths {
+                    // With filter: use filter paths, looking up status from flat_file_entries
+                    let mut filtered: Vec<&FileTreeEntry> = self
+                        .flat_file_entries
+                        .iter()
+                        .filter(|e| paths.contains(&e.path))
+                        .collect();
+                    if filtered.is_empty() {
+                        // Fallback: create entries from filter paths directly
+                        let mut paths_vec: Vec<String> = paths.iter().cloned().collect();
+                        paths_vec.sort();
+                        for path in paths_vec {
+                            let status = self.find_entry_status(&path);
+                            self.flat_entries.push(FlatEntry {
+                                name: path.clone(),
+                                path,
+                                depth: 0,
+                                is_dir: false,
+                                expanded: false,
+                                has_children: false,
+                                status,
+                                is_last_at_depth: vec![],
+                            });
+                        }
+                        None
+                    } else {
+                        filtered.sort_by(|a, b| a.path.to_lowercase().cmp(&b.path.to_lowercase()));
+                        Some(filtered)
+                    }
+                } else {
+                    // Without filter: use all flat_file_entries
+                    let all: Vec<&FileTreeEntry> = self.flat_file_entries.iter().collect();
+                    Some(all)
+                };
+                if let Some(entries) = source {
+                    for entry in entries {
+                        self.flat_entries.push(FlatEntry {
+                            name: entry.path.clone(), // Full path as display name
+                            path: entry.path.clone(),
+                            depth: 0,
+                            is_dir: false,
+                            expanded: false,
+                            has_children: false,
+                            status: entry.status,
+                            is_last_at_depth: vec![],
+                        });
+                    }
+                }
+            }
+        }
         self.recalc_max_content_width();
     }
 
@@ -208,6 +288,23 @@ impl FileTreeView {
                 is_last_stack.pop();
             }
         }
+    }
+
+    fn find_entry_status(&self, path: &str) -> Option<FileTreeStatus> {
+        fn search(entries: &[FileTreeEntry], path: &str) -> Option<FileTreeStatus> {
+            for entry in entries {
+                if entry.path == path {
+                    return entry.status;
+                }
+                if entry.is_dir {
+                    if let Some(status) = search(&entry.children, path) {
+                        return Some(status);
+                    }
+                }
+            }
+            None
+        }
+        search(&self.entries, path)
     }
 
     pub fn selected_entry(&self) -> Option<&FlatEntry> {
@@ -362,10 +459,10 @@ impl FileTreeView {
             theme.border_unfocused
         };
 
-        let title = if self.show_ignored {
-            " Files [+ignored] "
-        } else {
-            " Files "
+        let title = match self.view_mode {
+            FileViewMode::Tree => " Files ",
+            FileViewMode::Flat => " Files [flat] ",
+            FileViewMode::TreeWithIgnored => " Files [+ignored] ",
         };
 
         let block = Block::new()
@@ -839,5 +936,183 @@ impl FileTreeView {
             // Default
             _ => "\u{f016}", // nf-fa-file_o (outlined/hollow)
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::git::{FileTreeEntry, FileTreeStatus};
+
+    fn make_file(name: &str, path: &str, status: Option<FileTreeStatus>) -> FileTreeEntry {
+        FileTreeEntry {
+            name: name.to_string(),
+            path: path.to_string(),
+            is_dir: false,
+            status,
+            children: vec![],
+            expanded: false,
+        }
+    }
+
+    fn make_dir(
+        name: &str,
+        path: &str,
+        children: Vec<FileTreeEntry>,
+        expanded: bool,
+    ) -> FileTreeEntry {
+        FileTreeEntry {
+            name: name.to_string(),
+            path: path.to_string(),
+            is_dir: true,
+            status: None,
+            children,
+            expanded,
+        }
+    }
+
+    #[test]
+    fn test_default_view_mode_is_tree() {
+        let view = FileTreeView::new();
+        assert_eq!(view.view_mode, FileViewMode::Tree);
+    }
+
+    #[test]
+    fn test_cycle_view_mode() {
+        let mut view = FileTreeView::new();
+        assert_eq!(view.view_mode, FileViewMode::Tree);
+        view.cycle_view_mode();
+        assert_eq!(view.view_mode, FileViewMode::Flat);
+        view.cycle_view_mode();
+        assert_eq!(view.view_mode, FileViewMode::TreeWithIgnored);
+        view.cycle_view_mode();
+        assert_eq!(view.view_mode, FileViewMode::Tree);
+    }
+
+    #[test]
+    fn test_flat_mode_shows_full_paths() {
+        let mut view = FileTreeView::new();
+        // Simulate repo providing tree entries (lazy-loaded, only top-level)
+        let tree_entries = vec![make_dir("src", "src", vec![], false)];
+        view.update(tree_entries);
+
+        // Simulate repo providing flat file entries (all files recursively)
+        let flat_entries = vec![
+            make_file("src/main.rs", "src/main.rs", None),
+            make_file("src/views/diff.rs", "src/views/diff.rs", None),
+        ];
+        view.cycle_view_mode(); // Switch to flat
+        view.update_flat(flat_entries);
+
+        assert_eq!(view.flat_entries.len(), 2);
+        assert_eq!(view.flat_entries[0].name, "src/main.rs");
+        assert_eq!(view.flat_entries[0].path, "src/main.rs");
+        assert_eq!(view.flat_entries[0].depth, 0);
+        assert!(!view.flat_entries[0].is_dir);
+        assert_eq!(view.flat_entries[1].name, "src/views/diff.rs");
+    }
+
+    #[test]
+    fn test_flat_mode_entries_from_repo_exclude_ignored() {
+        let mut view = FileTreeView::new();
+        view.cycle_view_mode(); // Switch to flat
+
+        // Repo's file_tree_flat() already excludes ignored files,
+        // so flat_file_entries should only contain non-ignored files
+        let flat_entries = vec![make_file(
+            "visible.rs",
+            "visible.rs",
+            Some(FileTreeStatus::Modified),
+        )];
+        view.update_flat(flat_entries);
+
+        assert_eq!(view.flat_entries.len(), 1);
+        assert_eq!(view.flat_entries[0].name, "visible.rs");
+    }
+
+    #[test]
+    fn test_flat_mode_sorted_alphabetically() {
+        let mut view = FileTreeView::new();
+        view.cycle_view_mode(); // Switch to flat
+
+        // Repo's file_tree_flat() returns entries sorted alphabetically
+        let flat_entries = vec![
+            make_file("alpha.rs", "alpha.rs", None),
+            make_file("mid.rs", "mid.rs", None),
+            make_file("zebra.rs", "zebra.rs", None),
+        ];
+        view.update_flat(flat_entries);
+
+        let names: Vec<&str> = view.flat_entries.iter().map(|e| e.name.as_str()).collect();
+        assert_eq!(names, vec!["alpha.rs", "mid.rs", "zebra.rs"]);
+    }
+
+    #[test]
+    fn test_flat_mode_with_filter_uses_filter_paths() {
+        let mut view = FileTreeView::new();
+
+        // Provide flat file entries (simulating repo data)
+        let flat_entries = vec![
+            make_file("src/main.rs", "src/main.rs", Some(FileTreeStatus::Modified)),
+            make_file("src/lib.rs", "src/lib.rs", None),
+        ];
+
+        // Set filter before switching to flat
+        let mut filter = HashSet::new();
+        filter.insert("src/main.rs".to_string());
+        view.set_filter(filter);
+
+        view.cycle_view_mode(); // Switch to flat
+        view.update_flat(flat_entries);
+
+        assert_eq!(view.flat_entries.len(), 1);
+        assert_eq!(view.flat_entries[0].name, "src/main.rs");
+        assert_eq!(view.flat_entries[0].status, Some(FileTreeStatus::Modified));
+    }
+
+    #[test]
+    fn test_tree_mode_preserves_depth() {
+        let mut view = FileTreeView::new();
+        let entries = vec![make_dir(
+            "src",
+            "src",
+            vec![make_file("main.rs", "src/main.rs", None)],
+            true,
+        )];
+        view.update(entries);
+
+        // Should be in tree mode by default
+        assert_eq!(view.view_mode, FileViewMode::Tree);
+        assert_eq!(view.flat_entries.len(), 2); // dir + file
+        assert_eq!(view.flat_entries[0].depth, 0); // dir at depth 0
+        assert!(view.flat_entries[0].is_dir);
+        assert_eq!(view.flat_entries[1].depth, 1); // file at depth 1
+    }
+
+    #[test]
+    fn test_toggle_back_to_tree_restores_hierarchy() {
+        let mut view = FileTreeView::new();
+        let tree_entries = vec![make_dir(
+            "src",
+            "src",
+            vec![make_file("main.rs", "src/main.rs", None)],
+            true,
+        )];
+        view.update(tree_entries);
+
+        // Switch to flat and provide flat data
+        view.cycle_view_mode(); // flat
+        let flat_entries = vec![make_file("src/main.rs", "src/main.rs", None)];
+        view.update_flat(flat_entries);
+        assert_eq!(view.flat_entries.len(), 1); // only the file
+        assert_eq!(view.flat_entries[0].depth, 0);
+
+        view.cycle_view_mode(); // TreeWithIgnored (still tree layout)
+        assert_eq!(view.flat_entries.len(), 2); // dir + file
+        assert!(view.flat_entries[0].is_dir);
+
+        view.cycle_view_mode(); // back to Tree
+        assert_eq!(view.flat_entries.len(), 2); // dir + file
+        assert!(view.flat_entries[0].is_dir);
     }
 }
