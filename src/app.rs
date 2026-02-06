@@ -2165,6 +2165,13 @@ impl App {
     }
 
     fn handle_key(&mut self, key: KeyEvent) -> Result<()> {
+        // Ctrl+S: save layout config explicitly
+        if key == KeyEvent::ctrl('s') {
+            self.save_layout_config();
+            self.message = Some("Layout saved".to_string());
+            return Ok(());
+        }
+
         match self.mode {
             Mode::Normal => self.handle_normal_key(key),
             Mode::Visual => self.handle_visual_key(key),
@@ -2756,7 +2763,6 @@ impl App {
                     match mouse.kind {
                         MouseEventKind::Up(MouseButton::Left) => {
                             debug!("  DRAG END");
-                            self.save_layout_config();
                             self.drag_state = None;
                             self.terminal.force_full_redraw();
                         }
@@ -4681,7 +4687,6 @@ impl App {
             column.panels[idx1].height = new_height1;
             column.panels[idx2].height = new_height2;
 
-            self.save_layout_config();
             self.terminal.force_full_redraw();
         }
     }
@@ -4716,7 +4721,6 @@ impl App {
             self.config.layout.columns[idx1].width = new_width1;
             self.config.layout.columns[idx2].width = new_width2;
 
-            self.save_layout_config();
             self.terminal.force_full_redraw();
         }
     }
