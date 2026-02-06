@@ -1,0 +1,19 @@
+<svg width="400" height="300" xmlns="http://www.w3.org/2000/svg">
+  <rect x="10" y="10" width="120" height="80" fill="#3b82f6" rx="5"/>
+  <text x="70" y="55" text-anchor="middle" fill="white" font-family="Arial" font-size="14">Frontend</text>
+
+  <rect x="140" y="110" width="120" height="80" fill="#10b981" rx="5"/>
+  <text x="200" y="155" text-anchor="middle" fill="white" font-family="Arial" font-size="14">Backend API</text>
+
+  <rect x="270" y="210" width="120" height="80" fill="#f59e0b" rx="5"/>
+  <text x="330" y="255" text-anchor="middle" fill="white" font-family="Arial" font-size="14">Database</text>
+
+  <line x1="130" y1="50" x2="140" y2="150" stroke="#6b7280" stroke-width="2" marker-end="url(#arrowhead)"/>
+  <line x1="260" y1="150" x2="270" y2="250" stroke="#6b7280" stroke-width="2" marker-end="url(#arrowhead)"/>
+
+  <defs>
+    <marker id="arrowhead" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+      <polygon points="0 0, 10 3.5, 0 7" fill="#6b7280"/>
+    </marker>
+  </defs>
+</svg>
