@@ -41,6 +41,7 @@ pub struct PullRequestPreview {
     pub url: String,
     pub created_at: String,
     pub mergeable: String,
+    pub comments: Vec<(String, String, String)>, // (author, date, body)
 }
 
 impl From<&PullRequestInfo> for PullRequestPreview {
@@ -59,6 +60,11 @@ impl From<&PullRequestInfo> for PullRequestPreview {
             url: pr.url.clone(),
             created_at: pr.created_at.clone(),
             mergeable: pr.mergeable.clone(),
+            comments: pr
+                .comments
+                .iter()
+                .map(|c| (c.author.login.clone(), c.created_at.clone(), c.body.clone()))
+                .collect(),
         }
     }
 }
@@ -1448,21 +1454,14 @@ impl DiffView {
         ));
         lines.push((String::new(), Style::new()));
 
-        // Body
-        if pr.body.is_empty() {
-            lines.push((
-                "No description provided.".to_string(),
-                Style::new().fg(theme.border_unfocused),
-            ));
-        } else {
-            // Split body into lines, handling long lines
-            for line in pr.body.lines() {
-                // Wrap long lines
-                let max_width = inner.width.saturating_sub(2) as usize;
+        let max_width = inner.width.saturating_sub(2) as usize;
+
+        // Helper closure for word-wrapping text
+        let wrap_text = |text: &str, style: Style, lines: &mut Vec<(String, Style)>| {
+            for line in text.lines() {
                 if line.chars().count() <= max_width {
-                    lines.push((line.to_string(), Style::new().fg(theme.foreground)));
+                    lines.push((line.to_string(), style));
                 } else {
-                    // Simple word wrap
                     let mut current_line = String::new();
                     for word in line.split_whitespace() {
                         if current_line.is_empty() {
@@ -1473,14 +1472,45 @@ impl DiffView {
                             current_line.push(' ');
                             current_line.push_str(word);
                         } else {
-                            lines.push((current_line, Style::new().fg(theme.foreground)));
+                            lines.push((current_line, style));
                             current_line = word.to_string();
                         }
                     }
                     if !current_line.is_empty() {
-                        lines.push((current_line, Style::new().fg(theme.foreground)));
+                        lines.push((current_line, style));
                     }
                 }
+            }
+        };
+
+        // Body
+        if pr.body.is_empty() {
+            lines.push((
+                "No description provided.".to_string(),
+                Style::new().fg(theme.border_unfocused),
+            ));
+        } else {
+            wrap_text(&pr.body, Style::new().fg(theme.foreground), &mut lines);
+        }
+
+        // Comments
+        if !pr.comments.is_empty() {
+            lines.push((String::new(), Style::new()));
+            lines.push(("─".repeat(max_width), Style::new().fg(theme.border)));
+            lines.push((
+                format!("Comments ({})", pr.comments.len()),
+                Style::new().fg(theme.foreground).bold(),
+            ));
+            lines.push((String::new(), Style::new()));
+
+            for (author, date, body) in &pr.comments {
+                let formatted_date = date.split('T').next().unwrap_or(date);
+                lines.push((
+                    format!("{} on {}", author, formatted_date),
+                    Style::new().fg(theme.diff_hunk),
+                ));
+                wrap_text(body, Style::new().fg(theme.foreground), &mut lines);
+                lines.push((String::new(), Style::new()));
             }
         }
 

@@ -11,6 +11,7 @@ use crate::views::{
     RemotesView, Section, StashView, StatusView, SubmodulesView, TagsView, WorktreeView,
 };
 use crate::widgets::{Block, Borders, Widget};
+use std::collections::HashSet;
 use std::path::PathBuf;
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::thread;
@@ -1057,6 +1058,14 @@ impl App {
             self.commits_view.set_highlight_branch(Some(branch.clone()));
             self.actions_view.set_highlight_branch(Some(branch));
 
+            // Filter FileTree to show only PR changed files
+            if !pr.files.is_empty() {
+                let file_paths: HashSet<String> = pr.files.iter().map(|f| f.path.clone()).collect();
+                self.filetree_view.set_filter(file_paths);
+            } else {
+                self.filetree_view.clear_filter();
+            }
+
             // Fetch commits for this specific PR asynchronously
             let pr_number = pr.number;
             self.start_async_pr_commits_load(pr_number);
@@ -1066,6 +1075,7 @@ impl App {
             self.commits_view.set_highlight_branch(None);
             self.actions_view.set_highlight_branch(None);
             self.refreshing_pr_commits = None;
+            self.filetree_view.clear_filter();
         }
         self.terminal.force_full_redraw();
     }
@@ -3036,7 +3046,8 @@ impl App {
                     column.panels[panel_idx].height + column.panels[panel_idx + 1].height;
 
                 let min_height = 0.03; // 3% minimum
-                let new_height = (mouse_y_pct - panel_start).clamp(min_height, combined_height - min_height);
+                let new_height =
+                    (mouse_y_pct - panel_start).clamp(min_height, combined_height - min_height);
                 let next_height = combined_height - new_height;
 
                 column.panels[panel_idx].height = new_height;
@@ -3086,8 +3097,8 @@ impl App {
                         let combined_height = column.panels[left_panel_idx].height
                             + column.panels[left_panel_idx + 1].height;
 
-                        let new_height =
-                            (mouse_y_pct - panel_start).clamp(min_height, combined_height - min_height);
+                        let new_height = (mouse_y_pct - panel_start)
+                            .clamp(min_height, combined_height - min_height);
                         let next_height = combined_height - new_height;
 
                         column.panels[left_panel_idx].height = new_height;
@@ -3107,8 +3118,8 @@ impl App {
                         let combined_height = column.panels[right_panel_idx].height
                             + column.panels[right_panel_idx + 1].height;
 
-                        let new_height =
-                            (mouse_y_pct - panel_start).clamp(min_height, combined_height - min_height);
+                        let new_height = (mouse_y_pct - panel_start)
+                            .clamp(min_height, combined_height - min_height);
                         let next_height = combined_height - new_height;
 
                         column.panels[right_panel_idx].height = new_height;
@@ -3908,9 +3919,10 @@ impl App {
             KeyCode::Char('s') if self.focused_panel == PanelType::Commits => {
                 if let Some(commit) = self.commits_view.selected_commit() {
                     // Find first branch ref (skip tags)
-                    let branch_ref = commit.refs.iter().find(|r| {
-                        !r.starts_with("tag: ") && *r != "HEAD"
-                    });
+                    let branch_ref = commit
+                        .refs
+                        .iter()
+                        .find(|r| !r.starts_with("tag: ") && *r != "HEAD");
 
                     if let Some(ref_name) = branch_ref {
                         // Determine if it's a remote or local branch
@@ -5046,7 +5058,7 @@ fn fetch_pull_requests(repo_path: &PathBuf) -> std::result::Result<Vec<PullReque
             "pr",
             "list",
             "--json",
-            "number,title,author,state,createdAt,baseRefName,headRefName,additions,deletions,isDraft,body,url,mergeable",
+            "number,title,author,state,createdAt,baseRefName,headRefName,additions,deletions,isDraft,body,url,mergeable,comments,files",
             "--limit",
             "100",
         ])
