@@ -24,6 +24,18 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "812e12b5285cc515a9c72a5c1d3b6d46a19dac5acfef5265968c166106e31dd3"
 
 [[package]]
+name = "blazing"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "git2",
+ "libc",
+ "serde",
+ "serde_json",
+ "windows-sys",
+]
+
+[[package]]
 name = "bumpalo"
 version = "3.19.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -90,18 +102,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "cb4cb245038516f5f85277875cdaa4f7d2c9a0fa0468de06ed190163b1581fcf"
 dependencies = [
  "percent-encoding",
-]
-
-[[package]]
-name = "g"
-version = "0.1.0"
-dependencies = [
- "chrono",
- "git2",
- "libc",
- "serde",
- "serde_json",
- "windows-sys",
 ]
 
 [[package]]
