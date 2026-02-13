@@ -27,6 +27,19 @@ pub struct Theme {
     pub commit_refs: Color,
 }
 
+pub const HIGHLIGHT_COLORS: &[(Color, &str)] = &[
+    (Color::Rgb(255, 140, 0), "orange"),
+    (Color::Rgb(137, 180, 250), "blue"),
+    (Color::Rgb(166, 227, 161), "green"),
+    (Color::Rgb(243, 139, 168), "red"),
+    (Color::Rgb(203, 166, 247), "purple"),
+    (Color::Rgb(250, 179, 135), "peach"),
+    (Color::Rgb(137, 220, 235), "cyan"),
+    (Color::Rgb(249, 226, 175), "yellow"),
+    (Color::Rgb(242, 205, 205), "pink"),
+    (Color::White, "white"),
+];
+
 impl Theme {
     pub fn default() -> Self {
         Self {
@@ -54,5 +67,60 @@ impl Theme {
             commit_time: Color::Rgb(108, 112, 134), // #6c7086 (dim)
             commit_refs: Color::Rgb(166, 227, 161), // #a6e3a1 (green)
         }
+    }
+
+    pub fn highlight_color_index(&self) -> usize {
+        HIGHLIGHT_COLORS
+            .iter()
+            .position(|(c, _)| *c == self.selection)
+            .unwrap_or(0)
+    }
+
+    pub fn cycle_highlight_color(&mut self) -> (Color, &'static str) {
+        let current = self.highlight_color_index();
+        let next = (current + 1) % HIGHLIGHT_COLORS.len();
+        let (color, name) = HIGHLIGHT_COLORS[next];
+        self.selection = color;
+        self.border_focused = color;
+        (color, name)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_default_highlight_is_orange() {
+        let theme = Theme::default();
+        assert_eq!(theme.selection, Color::Rgb(255, 140, 0));
+        assert_eq!(theme.highlight_color_index(), 0);
+    }
+
+    #[test]
+    fn test_cycle_highlight_color_advances() {
+        let mut theme = Theme::default();
+        let (color, name) = theme.cycle_highlight_color();
+        assert_eq!(color, Color::Rgb(137, 180, 250));
+        assert_eq!(name, "blue");
+        assert_eq!(theme.selection, Color::Rgb(137, 180, 250));
+        assert_eq!(theme.border_focused, Color::Rgb(137, 180, 250));
+    }
+
+    #[test]
+    fn test_cycle_highlight_color_wraps_around() {
+        let mut theme = Theme::default();
+        for _ in 0..HIGHLIGHT_COLORS.len() {
+            theme.cycle_highlight_color();
+        }
+        assert_eq!(theme.selection, Color::Rgb(255, 140, 0));
+        assert_eq!(theme.highlight_color_index(), 0);
+    }
+
+    #[test]
+    fn test_highlight_color_index_unknown_color_defaults_to_zero() {
+        let mut theme = Theme::default();
+        theme.selection = Color::Rgb(1, 2, 3);
+        assert_eq!(theme.highlight_color_index(), 0);
     }
 }

@@ -3,9 +3,10 @@ mod parser;
 mod theme;
 
 pub use layout::{Column, LayoutConfig, PanelHeight};
-pub use theme::Theme;
+pub use theme::{Theme, HIGHLIGHT_COLORS};
 
 use crate::error::Result;
+use crate::tui::Color;
 use std::collections::HashMap;
 use std::path::PathBuf;
 
@@ -184,6 +185,16 @@ impl Config {
         // Parse layout config
         config.layout = LayoutConfig::from_toml(&toml);
 
+        // Parse theme
+        if let Some(parser::Value::Table(theme_table)) = toml.get("theme") {
+            if let Some(parser::Value::String(s)) = theme_table.get("selection_color") {
+                if let Some(color) = Color::from_hex(s) {
+                    config.theme.selection = color;
+                    config.theme.border_focused = color;
+                }
+            }
+        }
+
         // Parse view defaults
         if let Some(parser::Value::Table(views)) = toml.get("views") {
             if let Some(parser::Value::String(s)) = views.get("diff_mode") {
@@ -212,6 +223,62 @@ impl Config {
         Ok(config)
     }
 
+    pub fn save_highlight_color(&self) {
+        let config_path = Self::config_path();
+
+        if let Some(parent) = config_path.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+
+        let hex = match self.theme.selection.to_hex() {
+            Some(h) => h,
+            None => return,
+        };
+
+        let mut content = String::new();
+        let mut found_theme_section = false;
+        let mut replaced_selection = false;
+
+        if let Ok(existing) = std::fs::read_to_string(&config_path) {
+            let mut in_theme_section = false;
+            for line in existing.lines() {
+                if line.trim() == "[theme]" {
+                    in_theme_section = true;
+                    found_theme_section = true;
+                    content.push_str(line);
+                    content.push('\n');
+                    continue;
+                }
+                if in_theme_section && line.trim_start().starts_with("selection_color") {
+                    content.push_str(&format!("selection_color = \"{}\"\n", hex));
+                    replaced_selection = true;
+                    continue;
+                }
+                if in_theme_section && line.starts_with('[') {
+                    if !replaced_selection {
+                        content.push_str(&format!("selection_color = \"{}\"\n", hex));
+                        replaced_selection = true;
+                    }
+                    in_theme_section = false;
+                }
+                content.push_str(line);
+                content.push('\n');
+            }
+            if found_theme_section && !replaced_selection {
+                content.push_str(&format!("selection_color = \"{}\"\n", hex));
+            }
+        }
+
+        if !found_theme_section {
+            if !content.is_empty() && !content.ends_with('\n') {
+                content.push('\n');
+            }
+            content.push_str(&format!("\n[theme]\nselection_color = \"{}\"\n", hex));
+        }
+
+        let _ = std::fs::write(&config_path, content);
+    }
+
     pub fn current_theme(&self) -> &Theme {
         &self.theme
     }
@@ -222,5 +289,27 @@ impl Config {
             .or_else(|| std::env::var("VISUAL").ok())
             .or_else(|| std::env::var("EDITOR").ok())
             .unwrap_or_else(|| "vi".to_string())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_parse_selection_color_from_theme_section() {
+        let content = r##"
+[theme]
+selection_color = "#89b4fa"
+"##;
+        let config = Config::parse(content).unwrap();
+        assert_eq!(config.theme.selection, Color::Rgb(137, 180, 250));
+    }
+
+    #[test]
+    fn test_parse_default_selection_color_without_theme_section() {
+        let content = "";
+        let config = Config::parse(content).unwrap();
+        assert_eq!(config.theme.selection, Color::Rgb(255, 140, 0));
     }
 }

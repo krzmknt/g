@@ -166,6 +166,13 @@ impl Color {
 
         Some(Color::Rgb(r, g, b))
     }
+
+    pub fn to_hex(self) -> Option<String> {
+        match self {
+            Color::Rgb(r, g, b) => Some(format!("#{:02x}{:02x}{:02x}", r, g, b)),
+            _ => None,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
