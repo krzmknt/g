@@ -1,9 +1,10 @@
 use std::time::{Duration, Instant};
 
 /// Loading state for async data fetching
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub enum LoadingState<T> {
     /// Initial state, not yet loaded
+    #[default]
     NotLoaded,
     /// Currently loading data (shows spinner)
     Loading {
@@ -87,12 +88,6 @@ impl<T> LoadingState<T> {
         } else {
             " "
         }
-    }
-}
-
-impl<T: Default> Default for LoadingState<T> {
-    fn default() -> Self {
-        LoadingState::NotLoaded
     }
 }
 

@@ -4,4 +4,5 @@ pub struct TagInfo {
     pub message: Option<String>,
     pub target: String,
     pub is_annotated: bool,
+    pub timestamp: i64,
 }

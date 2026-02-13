@@ -453,14 +453,12 @@ impl BranchesView {
 
         // Add upstream tracking info for local branches (only when show_upstream is true)
         let upstream_info = if show_upstream {
-            if let Some(ref upstream) = branch.upstream {
-                Some((
+            branch.upstream.as_ref().map(|upstream| {
+                (
                     format!(" -> {} {}", upstream.short_id, upstream.name),
                     theme.branch_remote,
-                ))
-            } else {
-                None
-            }
+                )
+            })
         } else {
             None
         };

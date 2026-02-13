@@ -270,7 +270,7 @@ impl Repository {
             .args(["push", "--delete", remote_name, branch_name])
             .current_dir(&self.path)
             .output()
-            .map_err(|e| Error::Io(e))?;
+            .map_err(Error::Io)?;
 
         if output.status.success() {
             return Ok(());
@@ -283,7 +283,7 @@ impl Repository {
             .args(["update-ref", "-d", &ref_name])
             .current_dir(&self.path)
             .output()
-            .map_err(|e| Error::Io(e))?;
+            .map_err(Error::Io)?;
 
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
@@ -396,7 +396,7 @@ impl Repository {
                         .args(["checkout", "-b", local_name, name])
                         .current_dir(&self.path)
                         .output()
-                        .map_err(|e| Error::Io(e))?;
+                        .map_err(Error::Io)?;
 
                     if !output.status.success() {
                         let stderr = String::from_utf8_lossy(&output.stderr);
@@ -457,16 +457,14 @@ impl Repository {
 
         // Collect branch refs
         if let Ok(branches) = self.repo.branches(None) {
-            for branch_result in branches {
-                if let Ok((branch, _)) = branch_result {
-                    if let Ok(commit) = branch.get().peel_to_commit() {
-                        let name = branch.name().ok().flatten().unwrap_or("").to_string();
-                        if !name.is_empty() {
-                            ref_map
-                                .entry(commit.id().to_string())
-                                .or_default()
-                                .push(name);
-                        }
+            for (branch, _) in branches.flatten() {
+                if let Ok(commit) = branch.get().peel_to_commit() {
+                    let name = branch.name().ok().flatten().unwrap_or("").to_string();
+                    if !name.is_empty() {
+                        ref_map
+                            .entry(commit.id().to_string())
+                            .or_default()
+                            .push(name);
                     }
                 }
             }
@@ -490,11 +488,9 @@ impl Repository {
         let mut revwalk = self.repo.revwalk()?;
 
         // Push all branches (local and remote) to include all commits
-        for branch_result in self.repo.branches(None)? {
-            if let Ok((branch, _)) = branch_result {
-                if let Some(oid) = branch.get().target() {
-                    let _ = revwalk.push(oid);
-                }
+        for (branch, _) in (self.repo.branches(None)?).flatten() {
+            if let Some(oid) = branch.get().target() {
+                let _ = revwalk.push(oid);
             }
         }
 
@@ -600,7 +596,7 @@ impl Repository {
     pub fn unstage_file(&self, path: &str) -> Result<()> {
         let head = self.repo.head()?.peel_to_commit()?;
         self.repo
-            .reset_default(Some(&head.into_object()), &[Path::new(path)])?;
+            .reset_default(Some(&head.into_object()), [Path::new(path)])?;
         Ok(())
     }
 
@@ -805,15 +801,27 @@ impl Repository {
                     None
                 };
 
+                // Get commit timestamp for sorting
+                let timestamp = reference
+                    .peel(git2::ObjectType::Commit)
+                    .ok()
+                    .and_then(|obj| obj.into_commit().ok())
+                    .map(|commit| commit.time().seconds())
+                    .unwrap_or(0);
+
                 let is_annotated = message.is_some();
                 tags.push(TagInfo {
                     name: name.to_string(),
                     message,
                     target: target.unwrap_or_default(),
                     is_annotated,
+                    timestamp,
                 });
             }
         }
+
+        // Sort by timestamp descending (newest first)
+        tags.sort_by(|a, b| b.timestamp.cmp(&a.timestamp));
 
         Ok(tags)
     }
@@ -1067,7 +1075,7 @@ impl Repository {
             .args(["fetch", "--prune", remote_name])
             .current_dir(&self.path)
             .output()
-            .map_err(|e| Error::Io(e))?;
+            .map_err(Error::Io)?;
 
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
@@ -1082,7 +1090,7 @@ impl Repository {
             .args(["push", remote_name])
             .current_dir(&self.path)
             .output()
-            .map_err(|e| Error::Io(e))?;
+            .map_err(Error::Io)?;
 
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
@@ -1097,7 +1105,7 @@ impl Repository {
             .args(["push", remote_name, branch])
             .current_dir(&self.path)
             .output()
-            .map_err(|e| Error::Io(e))?;
+            .map_err(Error::Io)?;
 
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
@@ -1112,7 +1120,7 @@ impl Repository {
             .args(["push", "-u", remote_name, branch])
             .current_dir(&self.path)
             .output()
-            .map_err(|e| Error::Io(e))?;
+            .map_err(Error::Io)?;
 
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
@@ -1126,7 +1134,7 @@ impl Repository {
             .args(["fetch", remote_name, branch])
             .current_dir(&self.path)
             .output()
-            .map_err(|e| Error::Io(e))?;
+            .map_err(Error::Io)?;
 
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
@@ -1140,7 +1148,7 @@ impl Repository {
             .args(["pull", remote_name])
             .current_dir(&self.path)
             .output()
-            .map_err(|e| Error::Io(e))?;
+            .map_err(Error::Io)?;
 
         let stdout = String::from_utf8_lossy(&output.stdout);
         let stderr = String::from_utf8_lossy(&output.stderr);
@@ -1168,7 +1176,7 @@ impl Repository {
             .args(["pull", remote_name, branch])
             .current_dir(&self.path)
             .output()
-            .map_err(|e| Error::Io(e))?;
+            .map_err(Error::Io)?;
 
         let stdout = String::from_utf8_lossy(&output.stdout);
         let stderr = String::from_utf8_lossy(&output.stderr);
@@ -1333,8 +1341,6 @@ impl Repository {
                     FileTreeStatus::Deleted
                 } else if e.staged == FileStatus::Added {
                     FileTreeStatus::Added
-                } else if e.unstaged.is_changed() || e.staged.is_changed() {
-                    FileTreeStatus::Modified
                 } else {
                     FileTreeStatus::Modified
                 };
@@ -1470,8 +1476,6 @@ impl Repository {
                     FileTreeStatus::Deleted
                 } else if e.staged == FileStatus::Added {
                     FileTreeStatus::Added
-                } else if e.unstaged.is_changed() || e.staged.is_changed() {
-                    FileTreeStatus::Modified
                 } else {
                     FileTreeStatus::Modified
                 };
@@ -1578,32 +1582,30 @@ impl Repository {
         // Note: conflict detection is done below
 
         // Alternative: check for conflict markers in files
-        for entry in index.conflicts()? {
-            if let Ok(conflict) = entry {
-                let path = conflict
-                    .our
-                    .as_ref()
-                    .or(conflict.their.as_ref())
-                    .or(conflict.ancestor.as_ref())
-                    .and_then(|e| std::str::from_utf8(&e.path).ok())
-                    .unwrap_or("")
-                    .to_string();
+        for conflict in (index.conflicts()?).flatten() {
+            let path = conflict
+                .our
+                .as_ref()
+                .or(conflict.their.as_ref())
+                .or(conflict.ancestor.as_ref())
+                .and_then(|e| std::str::from_utf8(&e.path).ok())
+                .unwrap_or("")
+                .to_string();
 
-                let conflict_type = match (&conflict.our, &conflict.their) {
-                    (Some(_), Some(_)) => ConflictType::BothModified,
-                    (Some(_), None) => ConflictType::DeletedByThem,
-                    (None, Some(_)) => ConflictType::DeletedByUs,
-                    (None, None) => ConflictType::BothModified,
-                };
+            let conflict_type = match (&conflict.our, &conflict.their) {
+                (Some(_), Some(_)) => ConflictType::BothModified,
+                (Some(_), None) => ConflictType::DeletedByThem,
+                (None, Some(_)) => ConflictType::DeletedByUs,
+                (None, None) => ConflictType::BothModified,
+            };
 
-                conflicts.push(ConflictEntry {
-                    path,
-                    conflict_type,
-                    ours: None,
-                    theirs: None,
-                    ancestor: None,
-                });
-            }
+            conflicts.push(ConflictEntry {
+                path,
+                conflict_type,
+                ours: None,
+                theirs: None,
+                ancestor: None,
+            });
         }
 
         Ok(conflicts)
@@ -1627,7 +1629,7 @@ impl Repository {
         let commit = merge_head.peel_to_commit()?;
         let tree = commit.tree()?;
 
-        if let Some(entry) = tree.get_path(Path::new(path)).ok() {
+        if let Ok(entry) = tree.get_path(Path::new(path)) {
             let blob = self.repo.find_blob(entry.id())?;
             std::fs::write(self.path.join(path), blob.content())?;
         }
@@ -1649,9 +1651,9 @@ impl Repository {
         let mut other_refs: Vec<&str> = Vec::new();
 
         for r in &raw_refs {
-            if r.starts_with("HEAD -> ") {
+            if let Some(stripped) = r.strip_prefix("HEAD -> ") {
                 // Extract branch name from "HEAD -> main"
-                local_branches.push(r[8..].to_string());
+                local_branches.push(stripped.to_string());
             } else if *r == "HEAD" {
                 // Skip HEAD
                 continue;
@@ -1892,11 +1894,9 @@ impl Repository {
         let mut revwalk = self.repo.revwalk()?;
         revwalk.push_head()?;
 
-        for branch in self.repo.branches(None)? {
-            if let Ok((branch, _)) = branch {
-                if let Some(oid) = branch.get().target() {
-                    let _ = revwalk.push(oid);
-                }
+        for (branch, _) in (self.repo.branches(None)?).flatten() {
+            if let Some(oid) = branch.get().target() {
+                let _ = revwalk.push(oid);
             }
         }
 
@@ -1905,12 +1905,10 @@ impl Repository {
         let mut ref_map: std::collections::HashMap<String, Vec<String>> =
             std::collections::HashMap::new();
 
-        for branch in self.repo.branches(None)? {
-            if let Ok((branch, _)) = branch {
-                if let Some(oid) = branch.get().target() {
-                    let name = branch.name().ok().flatten().unwrap_or("").to_string();
-                    ref_map.entry(oid.to_string()).or_default().push(name);
-                }
+        for (branch, _) in (self.repo.branches(None)?).flatten() {
+            if let Some(oid) = branch.get().target() {
+                let name = branch.name().ok().flatten().unwrap_or("").to_string();
+                ref_map.entry(oid.to_string()).or_default().push(name);
             }
         }
 
@@ -1997,9 +1995,7 @@ impl Repository {
         }
 
         // Build the commit line
-        for i in 0..state_len {
-            let slot = &state[i];
-
+        for (i, slot) in state.iter().enumerate().take(state_len) {
             if i == col {
                 chars.push('*');
             } else if merging_cols.contains(&i) {

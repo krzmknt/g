@@ -1667,8 +1667,7 @@ impl DiffView {
             let line_matches = self.get_line_search_matches(absolute_line);
 
             let mut x_offset: u16 = 0;
-            let mut char_idx: usize = 0;
-            for c in content.chars() {
+            for (char_idx, c) in content.chars().enumerate() {
                 let cw = unicode_width(c) as u16;
                 if x_offset + cw > max_content_chars {
                     break;
@@ -1698,7 +1697,6 @@ impl DiffView {
                         .set_style(char_style);
                 }
                 x_offset += cw;
-                char_idx += 1;
             }
         }
 
@@ -1708,6 +1706,7 @@ impl DiffView {
         scrollbar.render(scrollbar_area, buf, Style::new().fg(theme.border));
     }
 
+    #[allow(clippy::type_complexity)]
     fn render_side_by_side(&mut self, inner: Rect, buf: &mut Buffer, theme: &Theme) {
         // Build paired lines for side-by-side view
         let paired_lines: Vec<(Option<(u32, String)>, Option<(u32, String)>)> = {
@@ -1828,12 +1827,7 @@ impl DiffView {
 
                 let style = if is_hunk_header {
                     Style::new().fg(theme.diff_hunk).bold()
-                } else if is_deletion && !right.is_some() {
-                    Style::new().fg(theme.foreground).bg(theme.diff_remove_bg)
-                } else if is_deletion
-                    && right.is_some()
-                    && left.as_ref().map(|(_, c)| c) != right.as_ref().map(|(_, c)| c)
-                {
+                } else if is_deletion {
                     Style::new().fg(theme.foreground).bg(theme.diff_remove_bg)
                 } else {
                     Style::new().fg(theme.foreground)
@@ -1889,12 +1883,7 @@ impl DiffView {
 
                 let style = if is_hunk_header {
                     Style::new().fg(theme.diff_hunk).bold()
-                } else if is_addition && !left.is_some() {
-                    Style::new().fg(theme.foreground).bg(theme.diff_add_bg)
-                } else if is_addition
-                    && left.is_some()
-                    && left.as_ref().map(|(_, c)| c) != right.as_ref().map(|(_, c)| c)
-                {
+                } else if is_addition {
                     Style::new().fg(theme.foreground).bg(theme.diff_add_bg)
                 } else {
                     Style::new().fg(theme.foreground)
@@ -2120,6 +2109,7 @@ impl DiffView {
         );
     }
 
+    #[allow(clippy::type_complexity)]
     fn flush_pairs(
         pairs: &mut Vec<(Option<(u32, String)>, Option<(u32, String)>)>,
         deletions: &mut Vec<(u32, String)>,

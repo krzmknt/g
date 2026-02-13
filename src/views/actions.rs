@@ -479,7 +479,7 @@ impl ActionsView {
                 Some("skipped") => "⊘",
                 _ => "?",
             },
-            "in_progress" => "●",
+            "in_progress" => "▶",
             "queued" => "○",
             _ => "?",
         }
@@ -492,7 +492,7 @@ impl ActionsView {
                 Some("failure") => theme.diff_remove,
                 _ => theme.border_unfocused,
             },
-            "in_progress" => theme.staged,
+            "in_progress" => theme.border_focused,
             "queued" => theme.border_unfocused,
             _ => theme.foreground,
         }
