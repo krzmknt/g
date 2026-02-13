@@ -492,7 +492,7 @@ impl ActionsView {
                 Some("failure") => theme.diff_remove,
                 _ => theme.border_unfocused,
             },
-            "in_progress" => theme.border_focused,
+            "in_progress" => crate::tui::Color::Rgb(137, 180, 250),
             "queued" => theme.border_unfocused,
             _ => theme.foreground,
         }
