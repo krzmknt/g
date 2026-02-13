@@ -1,11 +1,15 @@
 [package]
-name = "g"
+name = "blazing"
 version = "0.1.0"
 edition = "2021"
 authors = ["krzmknt"]
 description = "A blazingly fast Git TUI"
 license = "MIT"
 repository = "https://github.com/krzmknt/g"
+
+[[bin]]
+name = "g"
+path = "src/main.rs"
 
 [dependencies]
 git2 = "0.19"
