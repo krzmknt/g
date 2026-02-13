@@ -51,7 +51,7 @@ impl Style {
         self
     }
 
-    pub fn to_ansi(&self) -> String {
+    pub fn to_ansi(self) -> String {
         let mut result = String::with_capacity(32);
         result.push_str("\x1b[0m"); // Reset first
 
@@ -106,7 +106,7 @@ pub enum Color {
 }
 
 impl Color {
-    pub fn to_ansi_fg(&self) -> String {
+    pub fn to_ansi_fg(self) -> String {
         match self {
             Color::Reset => "\x1b[39m".to_string(),
             Color::Black => "\x1b[30m".to_string(),
@@ -130,7 +130,7 @@ impl Color {
         }
     }
 
-    pub fn to_ansi_bg(&self) -> String {
+    pub fn to_ansi_bg(self) -> String {
         match self {
             Color::Reset => "\x1b[49m".to_string(),
             Color::Black => "\x1b[40m".to_string(),

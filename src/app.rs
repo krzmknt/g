@@ -1701,6 +1701,7 @@ impl App {
         view.render(area, buf, theme, focused);
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn render_footer(
         buf: &mut Buffer,
         area: Rect,
@@ -1893,45 +1894,36 @@ impl App {
             }
             Mode::Confirm(action) => {
                 let action_desc = match action {
-                    ConfirmAction::BranchDelete => format!(
-                        "Delete branch '{}'?",
-                        confirm_target.as_deref().unwrap_or("?")
-                    ),
-                    ConfirmAction::BranchForceDelete => format!(
-                        "Force delete branch '{}'?",
-                        confirm_target.as_deref().unwrap_or("?")
-                    ),
-                    ConfirmAction::RemoteBranchDelete => format!(
-                        "Delete remote branch '{}'?",
-                        confirm_target.as_deref().unwrap_or("?")
-                    ),
-                    ConfirmAction::Discard => format!(
-                        "Discard changes in '{}'?",
-                        confirm_target.as_deref().unwrap_or("?")
-                    ),
+                    ConfirmAction::BranchDelete => {
+                        format!("Delete branch '{}'?", confirm_target.unwrap_or("?"))
+                    }
+                    ConfirmAction::BranchForceDelete => {
+                        format!("Force delete branch '{}'?", confirm_target.unwrap_or("?"))
+                    }
+                    ConfirmAction::RemoteBranchDelete => {
+                        format!("Delete remote branch '{}'?", confirm_target.unwrap_or("?"))
+                    }
+                    ConfirmAction::Discard => {
+                        format!("Discard changes in '{}'?", confirm_target.unwrap_or("?"))
+                    }
                     ConfirmAction::Push => "Push to remote?".to_string(),
-                    ConfirmAction::BranchPush => format!(
-                        "Push branch '{}' to remote?",
-                        confirm_target.as_deref().unwrap_or("?")
-                    ),
+                    ConfirmAction::BranchPush => {
+                        format!("Push branch '{}' to remote?", confirm_target.unwrap_or("?"))
+                    }
                     ConfirmAction::BranchMerge => format!(
                         "Merge branch '{}' into current branch?",
-                        confirm_target.as_deref().unwrap_or("?")
+                        confirm_target.unwrap_or("?")
                     ),
-                    ConfirmAction::StashDrop => format!(
-                        "Drop stash@{{{}}}?",
-                        confirm_target.as_deref().unwrap_or("?")
-                    ),
+                    ConfirmAction::StashDrop => {
+                        format!("Drop stash@{{{}}}?", confirm_target.unwrap_or("?"))
+                    }
                     ConfirmAction::CommitRevert => format!(
                         "Revert commit {}?",
-                        confirm_target
-                            .as_deref()
-                            .map(|s| &s[..7.min(s.len())])
-                            .unwrap_or("?")
+                        confirm_target.map(|s| &s[..7.min(s.len())]).unwrap_or("?")
                     ),
                     ConfirmAction::DeleteMergedBranches => format!(
                         "Delete merged branches? ({})",
-                        confirm_target.as_deref().unwrap_or("0 local, 0 remote")
+                        confirm_target.unwrap_or("0 local, 0 remote")
                     ),
                     ConfirmAction::PrMerge => {
                         let method = match pr_merge_method {
@@ -1942,27 +1934,25 @@ impl App {
                         };
                         format!(
                             "Merge PR #{} with {}?",
-                            confirm_target.as_deref().unwrap_or("?"),
+                            confirm_target.unwrap_or("?"),
                             method
                         )
                     }
                     ConfirmAction::PrClose => {
-                        format!("Close PR #{}?", confirm_target.as_deref().unwrap_or("?"))
+                        format!("Close PR #{}?", confirm_target.unwrap_or("?"))
                     }
-                    ConfirmAction::PrCreate => format!(
-                        "Create PR to '{}'?",
-                        confirm_target.as_deref().unwrap_or("?")
-                    ),
+                    ConfirmAction::PrCreate => {
+                        format!("Create PR to '{}'?", confirm_target.unwrap_or("?"))
+                    }
                     ConfirmAction::IssueClose => {
-                        format!("Close issue #{}?", confirm_target.as_deref().unwrap_or("?"))
+                        format!("Close issue #{}?", confirm_target.unwrap_or("?"))
                     }
-                    ConfirmAction::IssueReopen => format!(
-                        "Reopen issue #{}?",
-                        confirm_target.as_deref().unwrap_or("?")
-                    ),
+                    ConfirmAction::IssueReopen => {
+                        format!("Reopen issue #{}?", confirm_target.unwrap_or("?"))
+                    }
                     ConfirmAction::IssueDelete => format!(
                         "Delete issue #{}? (This cannot be undone!)",
-                        confirm_target.as_deref().unwrap_or("?")
+                        confirm_target.unwrap_or("?")
                     ),
                 };
                 let warn_style = Style::new().fg(theme.diff_remove).bold();
@@ -2003,13 +1993,9 @@ impl App {
                 );
             }
             Mode::Select(action) => {
-                let commit_id_short = confirm_target
-                    .as_deref()
-                    .map(|s| &s[..7.min(s.len())])
-                    .unwrap_or("?");
+                let commit_id_short = confirm_target.map(|s| &s[..7.min(s.len())]).unwrap_or("?");
 
                 let pr_number = confirm_target
-                    .as_deref()
                     .and_then(|s| s.parse::<u32>().ok())
                     .unwrap_or(0);
 
@@ -2066,13 +2052,14 @@ impl App {
                 buf.set_string(
                     x_pos + 1,
                     area.y + 2,
-                    &format!("- {}", selected_desc),
+                    format!("- {}", selected_desc),
                     desc_style,
                 );
             }
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn render_command_line(
         buf: &mut Buffer,
         x: u16,
@@ -2474,7 +2461,7 @@ impl App {
                         thread::spawn(move || {
                             let result = crate::git::Repository::open(&repo_path)
                                 .map_err(|e| e.to_string())
-                                .and_then(|repo| {
+                                .map(|repo| {
                                     let mut deleted_local = 0;
                                     let mut deleted_remote = 0;
                                     let mut errors = Vec::new();
@@ -2502,23 +2489,23 @@ impl App {
                                     }
 
                                     if errors.is_empty() {
-                                        Ok(format!(
+                                        format!(
                                             "Deleted {} local and {} remote merged branches",
                                             deleted_local, deleted_remote
-                                        ))
+                                        )
                                     } else if errors.len() == 1 {
-                                        Ok(format!(
+                                        format!(
                                             "Deleted {} local, {} remote. Error: {}",
                                             deleted_local, deleted_remote, errors[0]
-                                        ))
+                                        )
                                     } else {
-                                        Ok(format!(
+                                        format!(
                                             "Deleted {} local, {} remote. {} errors: {}",
                                             deleted_local,
                                             deleted_remote,
                                             errors.len(),
                                             errors.join("; ")
-                                        ))
+                                        )
                                     }
                                 });
                             let _ = sender.send(AsyncLoadResult::RemoteOperationComplete(result));
@@ -2772,7 +2759,7 @@ impl App {
                         MouseEventKind::Drag(MouseButton::Left) => {
                             if let Some(ref drag_state) = self.drag_state.clone() {
                                 self.resize_panels(
-                                    &drag_state,
+                                    drag_state,
                                     mouse.column,
                                     mouse.row,
                                     width,
@@ -2899,71 +2886,70 @@ impl App {
             col_x += column.width;
 
             // Check if mouse is near this column's right edge (but not the last column)
-            if col_idx < self.config.layout.columns.len() - 1 {
-                if (mouse_x_pct - col_x).abs() < COL_THRESHOLD {
-                    // We're on a column border - check if also on a panel border
-                    // Check left column's panel borders
-                    let mut left_panel_y = 0.0f32;
-                    for (left_panel_idx, panel) in column.panels.iter().enumerate() {
-                        left_panel_y += panel.height;
-                        if left_panel_idx < column.panels.len() - 1 {
-                            if (mouse_y_pct - left_panel_y).abs() < PANEL_THRESHOLD {
-                                // Found intersection with left column panel border
-                                // Check if right column also has a panel border nearby
-                                let right_col = &self.config.layout.columns[col_idx + 1];
-                                let mut right_panel_y = 0.0f32;
-                                for (right_panel_idx, rpanel) in right_col.panels.iter().enumerate()
-                                {
-                                    right_panel_y += rpanel.height;
-                                    if right_panel_idx < right_col.panels.len() - 1 {
-                                        if (mouse_y_pct - right_panel_y).abs() < PANEL_THRESHOLD {
-                                            // Cross intersection: both columns have panel borders here
-                                            return Some(DragState {
-                                                drag_type: DragType::Intersection {
-                                                    col_idx,
-                                                    left_panel_idx,
-                                                    right_panel_idx,
-                                                },
-                                            });
-                                        }
-                                    }
-                                }
-                                // T intersection: only left column has panel border
+            if col_idx < self.config.layout.columns.len() - 1
+                && (mouse_x_pct - col_x).abs() < COL_THRESHOLD
+            {
+                // We're on a column border - check if also on a panel border
+                // Check left column's panel borders
+                let mut left_panel_y = 0.0f32;
+                for (left_panel_idx, panel) in column.panels.iter().enumerate() {
+                    left_panel_y += panel.height;
+                    if left_panel_idx < column.panels.len() - 1
+                        && (mouse_y_pct - left_panel_y).abs() < PANEL_THRESHOLD
+                    {
+                        // Found intersection with left column panel border
+                        // Check if right column also has a panel border nearby
+                        let right_col = &self.config.layout.columns[col_idx + 1];
+                        let mut right_panel_y = 0.0f32;
+                        for (right_panel_idx, rpanel) in right_col.panels.iter().enumerate() {
+                            right_panel_y += rpanel.height;
+                            if right_panel_idx < right_col.panels.len() - 1
+                                && (mouse_y_pct - right_panel_y).abs() < PANEL_THRESHOLD
+                            {
+                                // Cross intersection: both columns have panel borders here
                                 return Some(DragState {
                                     drag_type: DragType::Intersection {
                                         col_idx,
                                         left_panel_idx,
-                                        right_panel_idx: usize::MAX, // No right panel border
-                                    },
-                                });
-                            }
-                        }
-                    }
-
-                    // Check right column's panel borders (T from right side)
-                    let right_col = &self.config.layout.columns[col_idx + 1];
-                    let mut right_panel_y = 0.0f32;
-                    for (right_panel_idx, rpanel) in right_col.panels.iter().enumerate() {
-                        right_panel_y += rpanel.height;
-                        if right_panel_idx < right_col.panels.len() - 1 {
-                            if (mouse_y_pct - right_panel_y).abs() < PANEL_THRESHOLD {
-                                // T intersection: only right column has panel border
-                                return Some(DragState {
-                                    drag_type: DragType::Intersection {
-                                        col_idx,
-                                        left_panel_idx: usize::MAX, // No left panel border
                                         right_panel_idx,
                                     },
                                 });
                             }
                         }
+                        // T intersection: only left column has panel border
+                        return Some(DragState {
+                            drag_type: DragType::Intersection {
+                                col_idx,
+                                left_panel_idx,
+                                right_panel_idx: usize::MAX, // No right panel border
+                            },
+                        });
                     }
-
-                    // Just a column border, no panel intersection
-                    return Some(DragState {
-                        drag_type: DragType::ColumnBorder { col_idx },
-                    });
                 }
+
+                // Check right column's panel borders (T from right side)
+                let right_col = &self.config.layout.columns[col_idx + 1];
+                let mut right_panel_y = 0.0f32;
+                for (right_panel_idx, rpanel) in right_col.panels.iter().enumerate() {
+                    right_panel_y += rpanel.height;
+                    if right_panel_idx < right_col.panels.len() - 1
+                        && (mouse_y_pct - right_panel_y).abs() < PANEL_THRESHOLD
+                    {
+                        // T intersection: only right column has panel border
+                        return Some(DragState {
+                            drag_type: DragType::Intersection {
+                                col_idx,
+                                left_panel_idx: usize::MAX, // No left panel border
+                                right_panel_idx,
+                            },
+                        });
+                    }
+                }
+
+                // Just a column border, no panel intersection
+                return Some(DragState {
+                    drag_type: DragType::ColumnBorder { col_idx },
+                });
             }
         }
 

@@ -226,7 +226,6 @@ impl StatusView {
             if abs_row < pos + self.untracked.len() {
                 self.section = Section::Untracked;
                 self.list_state.select(Some(abs_row - pos));
-                return;
             }
         }
     }

@@ -204,10 +204,10 @@ impl BranchGraph {
 
             // Build prefix
             let mut prefix = String::new();
-            for col in 0..max_columns {
+            for (col, active) in active_columns.iter().enumerate().take(max_columns) {
                 if col == my_col {
                     prefix.push('*');
-                } else if active_columns[col] {
+                } else if *active {
                     prefix.push('|');
                 } else {
                     prefix.push(' ');

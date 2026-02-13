@@ -565,7 +565,7 @@ impl CommitsView {
             }
 
             // Overlay colored parts if not selected and not highlighted
-            if !(is_selected && focused) && !is_search_match && !is_pr_highlight {
+            if !(is_search_match || is_pr_highlight || is_selected && focused) {
                 self.render_compact_colors(
                     buf,
                     inner.x,
@@ -682,7 +682,7 @@ impl CommitsView {
             }
 
             // Overlay colored parts if not selected
-            if !(is_selected && focused) && !is_search_match {
+            if !(is_search_match || is_selected && focused) {
                 self.render_detailed_colors(
                     buf,
                     inner.x,
@@ -697,6 +697,7 @@ impl CommitsView {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn render_detailed_colors(
         &self,
         buf: &mut Buffer,
@@ -978,9 +979,9 @@ impl CommitsView {
 
         for r in refs {
             let r = r.as_str();
-            if r.starts_with("HEAD -> ") {
+            if let Some(stripped) = r.strip_prefix("HEAD -> ") {
                 // Extract branch name from "HEAD -> main", treat as local branch
-                local_branches.push(r[8..].to_string());
+                local_branches.push(stripped.to_string());
             } else if r == "HEAD" || r == "origin/HEAD" {
                 // Skip HEAD and origin/HEAD entirely
                 continue;
@@ -1034,10 +1035,10 @@ impl CommitsView {
             }
 
             // Extract branch name from remote (e.g., "origin/feature" -> "feature")
-            let branch_name = if remote.starts_with("origin/") {
-                &remote[7..]
-            } else if remote.starts_with("upstream/") {
-                &remote[9..]
+            let branch_name = if let Some(stripped) = remote.strip_prefix("origin/") {
+                stripped
+            } else if let Some(stripped) = remote.strip_prefix("upstream/") {
+                stripped
             } else if let Some(pos) = remote.find('/') {
                 &remote[pos + 1..]
             } else {
@@ -1192,7 +1193,7 @@ impl CommitsView {
                     }
 
                     // Overlay colored parts if not selected
-                    if !(is_selected && focused) && !is_search_match {
+                    if !(is_search_match || is_selected && focused) {
                         self.render_graph_colors(
                             buf,
                             inner.x,
@@ -1238,12 +1239,13 @@ impl CommitsView {
             buf.set_string(
                 x + screen_pos as u16,
                 y,
-                &ch.to_string(),
+                ch.to_string(),
                 Style::new().fg(color),
             );
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn render_graph_colors(
         &self,
         buf: &mut Buffer,
@@ -1287,7 +1289,7 @@ impl CommitsView {
                 buf.set_string(
                     x + screen_pos as u16,
                     y,
-                    &ch.to_string(),
+                    ch.to_string(),
                     Style::new().fg(color),
                 );
             }
