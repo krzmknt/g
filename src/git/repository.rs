@@ -805,15 +805,27 @@ impl Repository {
                     None
                 };
 
+                // Get commit timestamp for sorting
+                let timestamp = reference
+                    .peel(git2::ObjectType::Commit)
+                    .ok()
+                    .and_then(|obj| obj.into_commit().ok())
+                    .map(|commit| commit.time().seconds())
+                    .unwrap_or(0);
+
                 let is_annotated = message.is_some();
                 tags.push(TagInfo {
                     name: name.to_string(),
                     message,
                     target: target.unwrap_or_default(),
                     is_annotated,
+                    timestamp,
                 });
             }
         }
+
+        // Sort by timestamp descending (newest first)
+        tags.sort_by(|a, b| b.timestamp.cmp(&a.timestamp));
 
         Ok(tags)
     }
