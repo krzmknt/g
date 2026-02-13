@@ -4156,6 +4156,18 @@ impl App {
                 }
             }
 
+            // Cycle highlight color (panels where 'c' is not used)
+            KeyCode::Char('c')
+                if self.focused_panel != PanelType::Status
+                    && self.focused_panel != PanelType::Branches
+                    && self.focused_panel != PanelType::Commits
+                    && self.focused_panel != PanelType::Issues =>
+            {
+                let (_, name) = self.config.theme.cycle_highlight_color();
+                self.config.save_highlight_color();
+                self.message = Some(format!("Highlight: {}", name));
+            }
+
             // Toggle view mode (zoom)
             KeyCode::Char('z') => {
                 self.view_mode = match self.view_mode {
