@@ -337,7 +337,7 @@ impl Repository {
 
             // Skip the remote tracking branch for the current branch
             // e.g., if current is 'main', skip 'origin/main'
-            if let Some(remote_branch) = name.split('/').last() {
+            if let Some(remote_branch) = name.split('/').next_back() {
                 if remote_branch == current_branch {
                     continue;
                 }
@@ -2024,7 +2024,7 @@ impl Repository {
             state[col] = Some(commit.parent_id(0).unwrap());
             for i in 1..parent_count {
                 if let Ok(parent_id) = commit.parent_id(i) {
-                    if !state.iter().any(|s| *s == Some(parent_id)) {
+                    if !state.contains(&Some(parent_id)) {
                         if let Some(pos) = state.iter().position(|s| s.is_none()) {
                             state[pos] = Some(parent_id);
                         } else {

@@ -728,11 +728,7 @@ impl CommitsView {
         // refs_str format is "[main, origin/main] " (opening bracket, refs, closing bracket, trailing space)
         let pos = hash_len + 1; // after hash + space
         if !commit.refs.is_empty() && self.h_offset < pos + refs_len {
-            let screen_start = if self.h_offset > pos {
-                0
-            } else {
-                pos - self.h_offset
-            };
+            let screen_start = pos.saturating_sub(self.h_offset);
 
             let visible_start = self.h_offset.saturating_sub(pos);
             let mut current_pos = 0usize; // position within refs_str
@@ -920,11 +916,7 @@ impl CommitsView {
         let pos2 = pos + refs_len;
         if self.h_offset < pos2 + author_len {
             let start = self.h_offset.saturating_sub(pos2);
-            let screen_offset = if self.h_offset > pos2 {
-                0
-            } else {
-                pos2 - self.h_offset
-            };
+            let screen_offset = pos2.saturating_sub(self.h_offset);
             if screen_offset < width as usize && start < author_len {
                 let part: String = author.chars().skip(start).collect();
                 let max_len = (width as usize).saturating_sub(screen_offset);
@@ -1267,11 +1259,7 @@ impl CommitsView {
         // Graph (colorful - based on column position)
         if self.h_offset < pos + graph_len {
             let start = self.h_offset.saturating_sub(pos);
-            let screen_offset = if self.h_offset > pos {
-                0
-            } else {
-                pos - self.h_offset
-            };
+            let screen_offset = pos.saturating_sub(self.h_offset);
             for (ci, ch) in commit.graph_chars.chars().enumerate() {
                 if ci < start {
                     continue;
@@ -1299,11 +1287,7 @@ impl CommitsView {
         // Hash (cyan) - now comes after graph + space
         if self.h_offset < pos + hash_len {
             let start = self.h_offset.saturating_sub(pos);
-            let screen_offset = if self.h_offset > pos {
-                0
-            } else {
-                pos - self.h_offset
-            };
+            let screen_offset = pos.saturating_sub(self.h_offset);
             if screen_offset < width as usize && start < hash_len {
                 let part: String = commit.short_id.chars().skip(start).collect();
                 let max_len = (width as usize).saturating_sub(screen_offset);
@@ -1324,11 +1308,7 @@ impl CommitsView {
         // Refs with individual branch-type coloring - now comes after hash
         // refs_str format is " [main, origin/main]" so we need to match that
         if !commit.refs.is_empty() && self.h_offset < pos + refs_len {
-            let screen_start = if self.h_offset > pos {
-                0
-            } else {
-                pos - self.h_offset
-            };
+            let screen_start = pos.saturating_sub(self.h_offset);
 
             // Render each ref with its own color
             // Format: " [ref1, ref2, ...]" - leading space, opening bracket, refs separated by ", ", closing bracket
@@ -1517,11 +1497,7 @@ impl CommitsView {
         // Author (gray)
         if self.h_offset < pos + author_len {
             let start = self.h_offset.saturating_sub(pos);
-            let screen_offset = if self.h_offset > pos {
-                0
-            } else {
-                pos - self.h_offset
-            };
+            let screen_offset = pos.saturating_sub(self.h_offset);
             if screen_offset < width as usize && start < author_len {
                 let part: String = commit.author.chars().skip(start).collect();
                 let max_len = (width as usize).saturating_sub(screen_offset);
