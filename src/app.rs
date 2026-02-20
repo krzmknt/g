@@ -1,4 +1,4 @@
-use crate::config::{Config, DefaultCommitsMode, DefaultDiffMode, Theme};
+use crate::config::{Config, DefaultCommitsMode, DefaultDiffMode, Theme, LAYOUT_PRESET_NAMES};
 use crate::error::Result;
 use crate::git::{IssueInfo, PullRequestInfo, ReleaseInfo, Repository, WorkflowRun};
 use crate::input::{
@@ -1770,6 +1770,7 @@ impl App {
                         ("/", "search"),
                         ("r", "refresh"),
                         ("z", "zoom"),
+                        ("1-4", "preset"),
                     ]);
 
                     Self::render_command_line(
@@ -3126,7 +3127,10 @@ impl App {
     }
 
     /// Save the current layout config to file
-    fn save_layout_config(&self) {
+    fn save_layout_config(&mut self) {
+        // Sync current layout into the active preset
+        self.config.layout_presets[self.config.active_layout_preset] = self.config.layout.clone();
+
         let config_path = Config::config_path();
 
         // Create parent directory if it doesn't exist
@@ -3134,27 +3138,35 @@ impl App {
             let _ = std::fs::create_dir_all(parent);
         }
 
-        // Generate TOML content for columns
         let mut content = String::new();
 
         // Read existing config and preserve non-layout settings
         if let Ok(existing) = std::fs::read_to_string(&config_path) {
-            let mut in_columns_section = false;
+            let mut in_layout_section = false;
             for line in existing.lines() {
                 // Skip layout comment
-                if line.starts_with("# Layout (auto-generated)") {
-                    in_columns_section = true;
+                if line.starts_with("# Layout presets (auto-generated)")
+                    || line.starts_with("# Layout (auto-generated)")
+                {
+                    in_layout_section = true;
                     continue;
                 }
-                // Skip old column/panel definitions
-                if line.starts_with("[[columns]]") {
-                    in_columns_section = true;
+                // Skip old column/panel definitions and layout_preset sections
+                if line.starts_with("[[columns]]") || line.starts_with("[[layout_preset_") {
+                    in_layout_section = true;
                     continue;
                 }
-                if in_columns_section {
-                    // Skip until we hit a non-indented, non-empty line that's not part of columns
-                    if line.starts_with('[') && !line.starts_with("[[columns") {
-                        in_columns_section = false;
+                // Skip active_layout_preset line (will be rewritten)
+                if line.trim_start().starts_with("active_layout_preset") {
+                    continue;
+                }
+                if in_layout_section {
+                    // Skip until we hit a new non-layout section
+                    if line.starts_with('[')
+                        && !line.starts_with("[[columns")
+                        && !line.starts_with("[[layout_preset_")
+                    {
+                        in_layout_section = false;
                     } else {
                         continue;
                     }
@@ -3169,20 +3181,28 @@ impl App {
             content.pop();
         }
 
-        // Add column configurations
-        content.push_str("\n# Layout (auto-generated)\n");
-        for column in &self.config.layout.columns {
-            content.push_str("[[columns]]\n");
-            content.push_str(&format!("width = {:.3}\n", column.width));
-            content.push_str("panels = [\n");
-            for panel in &column.panels {
-                content.push_str(&format!(
-                    "  {{ type = \"{}\", height = {:.3} }},\n",
-                    panel_type_to_string(panel.panel),
-                    panel.height
-                ));
+        // Write active preset index
+        content.push_str(&format!(
+            "\nactive_layout_preset = {}\n",
+            self.config.active_layout_preset
+        ));
+
+        // Write all 4 layout presets
+        content.push_str("\n# Layout presets (auto-generated)\n");
+        for (i, preset) in self.config.layout_presets.iter().enumerate() {
+            for column in &preset.columns {
+                content.push_str(&format!("[[layout_preset_{}]]\n", i));
+                content.push_str(&format!("width = {:.3}\n", column.width));
+                content.push_str("panels = [\n");
+                for panel in &column.panels {
+                    content.push_str(&format!(
+                        "  {{ type = \"{}\", height = {:.3} }},\n",
+                        panel_type_to_string(panel.panel),
+                        panel.height
+                    ));
+                }
+                content.push_str("]\n\n");
             }
-            content.push_str("]\n\n");
         }
 
         let _ = std::fs::write(&config_path, content);
@@ -4174,6 +4194,31 @@ impl App {
                     ViewMode::MultiPane => ViewMode::SinglePane,
                     ViewMode::SinglePane => ViewMode::MultiPane,
                 };
+            }
+
+            // Layout presets (1-4)
+            KeyCode::Char(c @ '1'..='9') => {
+                let index = (c as usize) - ('1' as usize);
+                if index < 4 {
+                    // Save current layout back to the old preset
+                    self.config.layout_presets[self.config.active_layout_preset] =
+                        self.config.layout.clone();
+
+                    // Switch to new preset
+                    self.config.active_layout_preset = index;
+                    self.config.layout = self.config.layout_presets[index].clone();
+
+                    // If focused panel doesn't exist in new layout, focus first panel
+                    if self.config.layout.find_panel(self.focused_panel).is_none() {
+                        if let Some(first) = self.config.layout.all_panels().first() {
+                            self.focused_panel = *first;
+                        }
+                    }
+
+                    self.save_layout_config();
+                    let name = LAYOUT_PRESET_NAMES.get(index).unwrap_or(&"Custom");
+                    self.message = Some(format!("Preset: {}", name));
+                }
             }
 
             _ => {}

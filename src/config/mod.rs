@@ -2,7 +2,7 @@ mod layout;
 mod parser;
 mod theme;
 
-pub use layout::{Column, LayoutConfig, PanelHeight};
+pub use layout::{Column, LayoutConfig, PanelHeight, LAYOUT_PRESET_NAMES};
 pub use theme::{Theme, HIGHLIGHT_COLORS};
 
 use crate::error::Result;
@@ -60,6 +60,8 @@ pub struct Config {
     pub keybindings: HashMap<String, Vec<String>>,
     pub git: GitConfig,
     pub layout: LayoutConfig,
+    pub layout_presets: [LayoutConfig; 4],
+    pub active_layout_preset: usize,
     pub view_defaults: ViewDefaults,
 }
 
@@ -93,6 +95,13 @@ impl Default for Config {
             keybindings: HashMap::new(),
             git: GitConfig::default(),
             layout: LayoutConfig::default(),
+            layout_presets: [
+                LayoutConfig::preset(0).unwrap(),
+                LayoutConfig::preset(1).unwrap(),
+                LayoutConfig::preset(2).unwrap(),
+                LayoutConfig::preset(3).unwrap(),
+            ],
+            active_layout_preset: 0,
             view_defaults: ViewDefaults::default(),
         }
     }
@@ -182,8 +191,17 @@ impl Config {
             config.editor = Some(s.clone());
         }
 
-        // Parse layout config
-        config.layout = LayoutConfig::from_toml(&toml);
+        // Parse layout presets
+        config.layout_presets = LayoutConfig::presets_from_toml(&toml);
+
+        if let Some(parser::Value::Integer(n)) = toml.get("active_layout_preset") {
+            let idx = *n as usize;
+            if idx < 4 {
+                config.active_layout_preset = idx;
+            }
+        }
+
+        config.layout = config.layout_presets[config.active_layout_preset].clone();
 
         // Parse theme
         if let Some(parser::Value::Table(theme_table)) = toml.get("theme") {
@@ -311,5 +329,41 @@ selection_color = "#89b4fa"
         let content = "";
         let config = Config::parse(content).unwrap();
         assert_eq!(config.theme.selection, Color::Rgb(255, 140, 0));
+    }
+
+    #[test]
+    fn test_parse_active_layout_preset() {
+        let content = "active_layout_preset = 2";
+        let config = Config::parse(content).unwrap();
+        assert_eq!(config.active_layout_preset, 2);
+        // Active layout should be loaded from preset 2 (Review)
+        let expected = LayoutConfig::preset(2).unwrap();
+        assert_eq!(config.layout.columns.len(), expected.columns.len());
+    }
+
+    #[test]
+    fn test_parse_active_layout_preset_default() {
+        let content = "";
+        let config = Config::parse(content).unwrap();
+        assert_eq!(config.active_layout_preset, 0);
+    }
+
+    #[test]
+    fn test_parse_layout_presets_from_config() {
+        let content = r#"
+active_layout_preset = 0
+
+[[layout_preset_0]]
+width = 1.000
+panels = [
+  { type = "diff", height = 1.000 },
+]
+"#;
+        let config = Config::parse(content).unwrap();
+        // Preset 0 should be custom (1 column with diff)
+        assert_eq!(config.layout_presets[0].columns.len(), 1);
+        assert_eq!(config.layout.columns.len(), 1);
+        // Presets 1-3 should be defaults
+        assert_eq!(config.layout_presets[1].columns.len(), 2); // Compact default
     }
 }
