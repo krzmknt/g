@@ -1641,7 +1641,7 @@ impl App {
             }
 
             // Logo at bottom right
-            let logo = "g v0.1.0";
+            let logo = concat!("g v", env!("CARGO_PKG_VERSION"));
             let logo_x = buf.area.width.saturating_sub(logo.len() as u16 + 1);
             let logo_y = buf.area.height.saturating_sub(1);
             let logo_style = Style::new().fg(Color::Rgb(100, 100, 100)); // Dim gray
