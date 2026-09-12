@@ -229,7 +229,7 @@ impl IssuesView {
 
         let block = Block::new()
             .title(&title)
-            .borders(Borders::ALL)
+            .borders(Borders::TOP)
             .border_style(Style::new().fg(border_color));
 
         let inner = block.inner(area);

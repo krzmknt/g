@@ -11,7 +11,7 @@ use crate::views::{
     ReleasesView, RemotesView, Section, StashView, StatusView, SubmodulesView, TagsView,
     WorktreeView,
 };
-use crate::widgets::{Block, Borders, Widget};
+use crate::widgets::{Block, Borders, VerticalSeparator, Widget};
 use std::collections::HashSet;
 use std::path::PathBuf;
 use std::sync::mpsc::{self, Receiver, Sender};
@@ -1360,6 +1360,9 @@ impl App {
                     // Column-based layout: render columns, then panels within each column
                     let mut col_x = main.x;
                     let num_columns = self.config.layout.columns.len();
+                    // Rows where the previous column's panel title rules sit,
+                    // so the column separator can join them.
+                    let mut prev_rule_rows: Vec<u16> = Vec::new();
 
                     for (col_idx, column) in self.config.layout.columns.iter().enumerate() {
                         // Last column fills remaining width to avoid gaps
@@ -1369,18 +1372,43 @@ impl App {
                             (main.width as f32 * column.width) as u16
                         };
 
-                        let mut panel_y = main.y;
+                        // Every column after the first gives up its leftmost
+                        // cell to a vertical separator.
+                        let (panel_x, panel_w) = if col_idx == 0 {
+                            (col_x, col_width)
+                        } else {
+                            (col_x + 1, col_width.saturating_sub(1))
+                        };
+
                         let num_panels = column.panels.len();
+                        let panel_rows: Vec<(u16, u16)> = {
+                            let mut rows = Vec::with_capacity(num_panels);
+                            let mut panel_y = main.y;
+                            for (panel_idx, panel_height) in column.panels.iter().enumerate() {
+                                // Last panel fills remaining height to avoid gaps
+                                let panel_h = if panel_idx == num_panels - 1 {
+                                    main.y + main.height - panel_y
+                                } else {
+                                    (main.height as f32 * panel_height.height) as u16
+                                };
+                                rows.push((panel_y, panel_h));
+                                panel_y += panel_h;
+                            }
+                            rows
+                        };
+                        let rule_rows: Vec<u16> = panel_rows.iter().map(|(y, _)| *y).collect();
 
-                        for (panel_idx, panel_height) in column.panels.iter().enumerate() {
-                            // Last panel fills remaining height to avoid gaps
-                            let panel_h = if panel_idx == num_panels - 1 {
-                                main.y + main.height - panel_y
-                            } else {
-                                (main.height as f32 * panel_height.height) as u16
-                            };
+                        if col_idx > 0 {
+                            VerticalSeparator::new(Style::new().fg(theme.border_unfocused))
+                                .left_rules(&prev_rule_rows)
+                                .right_rules(&rule_rows)
+                                .render(Rect::new(col_x, main.y, 1, main.height), buf);
+                        }
 
-                            let panel_area = Rect::new(col_x, panel_y, col_width, panel_h);
+                        for (panel_height, (panel_y, panel_h)) in
+                            column.panels.iter().zip(panel_rows.iter().copied())
+                        {
+                            let panel_area = Rect::new(panel_x, panel_y, panel_w, panel_h);
                             let is_focused = focused_panel == panel_height.panel;
 
                             match panel_height.panel {
@@ -1453,10 +1481,9 @@ impl App {
                                     .releases_view
                                     .render(panel_area, buf, &theme, is_focused),
                             }
-
-                            panel_y += panel_h;
                         }
 
+                        prev_rule_rows = rule_rows;
                         col_x += col_width;
                     }
                 }

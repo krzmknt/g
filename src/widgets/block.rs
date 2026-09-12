@@ -77,7 +77,9 @@ impl<'a> Block<'a> {
 
 impl Widget for Block<'_> {
     fn render(&self, area: Rect, buf: &mut Buffer) {
-        if area.width < 2 || area.height < 2 {
+        let needs_vertical =
+            self.borders.contains(Borders::LEFT) || self.borders.contains(Borders::RIGHT);
+        if area.width < 2 || area.height < 1 || (needs_vertical && area.height < 2) {
             return;
         }
 
@@ -157,5 +159,34 @@ impl Widget for Block<'_> {
                 buf.set_string_truncated(title_x, area.y, title, max_width, self.title_style);
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn row(buf: &Buffer, y: u16, width: u16) -> String {
+        (0..width).map(|x| buf.get(x, y).symbol.as_str()).collect()
+    }
+
+    #[test]
+    fn top_border_only_renders_title_rule_and_keeps_full_width_inner() {
+        let area = Rect::new(0, 0, 12, 3);
+        let mut buf = Buffer::empty(area);
+        let block = Block::new().title(" Files ").borders(Borders::TOP);
+        block.render(area, &mut buf);
+
+        assert_eq!(row(&buf, 0, 12), "── Files ───");
+        assert_eq!(row(&buf, 1, 12), "            ");
+        assert_eq!(block.inner(area), Rect::new(0, 1, 12, 2));
+    }
+
+    #[test]
+    fn top_border_only_renders_when_area_is_one_row_tall() {
+        let area = Rect::new(0, 0, 6, 1);
+        let mut buf = Buffer::empty(area);
+        Block::new().borders(Borders::TOP).render(area, &mut buf);
+        assert_eq!(row(&buf, 0, 6), "──────");
     }
 }
