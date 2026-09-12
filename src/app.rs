@@ -336,6 +336,9 @@ impl App {
     pub fn run(&mut self) -> Result<()> {
         self.terminal.init()?;
         self.refresh_all()?;
+        if let Some(hint) = crate::tui::detect_underline_color_hint() {
+            self.message = Some(hint);
+        }
 
         let mut frame_count = 0u64;
         loop {
