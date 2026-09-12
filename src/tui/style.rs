@@ -198,10 +198,10 @@ impl Modifier {
     }
 }
 
-/// Minimum WCAG contrast ratio for a foreground to count as readable.
-const MIN_CONTRAST_RATIO: f32 = 1.4;
-/// Minimum Euclidean RGB distance for a foreground to count as readable.
-const MIN_RGB_DISTANCE: f32 = 90.0;
+/// Minimum Euclidean RGB distance between foreground and background for the
+/// foreground to count as readable. Only colors that are practically the
+/// same as the background fall below this.
+const MIN_RGB_DISTANCE: f32 = 60.0;
 
 impl Color {
     /// Resolve the color to RGB using the standard xterm palette for named
@@ -229,47 +229,22 @@ impl Color {
         }
     }
 
-    /// Relative luminance as defined by WCAG 2.x.
-    fn luminance(self) -> Option<f32> {
-        let (r, g, b) = self.to_rgb()?;
-        let channel = |v: u8| {
-            let c = v as f32 / 255.0;
-            if c <= 0.03928 {
-                c / 12.92
-            } else {
-                ((c + 0.055) / 1.055).powf(2.4)
-            }
-        };
-        Some(0.2126 * channel(r) + 0.7152 * channel(g) + 0.0722 * channel(b))
-    }
-
     /// Whether text in this color can be read on the given background.
     ///
-    /// A foreground is unreadable when it is nearly the same color as the
-    /// background or when its luminance contrast is too low. Colors with an
-    /// unknown value are treated as unreadable so callers fall back safely.
+    /// A foreground is unreadable only when it is (nearly) the same color as
+    /// the background. Colors with an unknown value are treated as unreadable
+    /// so callers fall back safely.
     pub fn is_readable_on(self, bg: Color) -> bool {
         let (Some(fg_rgb), Some(bg_rgb)) = (self.to_rgb(), bg.to_rgb()) else {
             return false;
         };
-        let (Some(fg_lum), Some(bg_lum)) = (self.luminance(), bg.luminance()) else {
-            return false;
-        };
 
-        let distance = {
-            let dr = fg_rgb.0 as f32 - bg_rgb.0 as f32;
-            let dg = fg_rgb.1 as f32 - bg_rgb.1 as f32;
-            let db = fg_rgb.2 as f32 - bg_rgb.2 as f32;
-            (dr * dr + dg * dg + db * db).sqrt()
-        };
-        let (lighter, darker) = if fg_lum > bg_lum {
-            (fg_lum, bg_lum)
-        } else {
-            (bg_lum, fg_lum)
-        };
-        let contrast = (lighter + 0.05) / (darker + 0.05);
+        let dr = fg_rgb.0 as f32 - bg_rgb.0 as f32;
+        let dg = fg_rgb.1 as f32 - bg_rgb.1 as f32;
+        let db = fg_rgb.2 as f32 - bg_rgb.2 as f32;
+        let distance = (dr * dr + dg * dg + db * db).sqrt();
 
-        distance >= MIN_RGB_DISTANCE && contrast >= MIN_CONTRAST_RATIO
+        distance >= MIN_RGB_DISTANCE
     }
 }
 
@@ -354,11 +329,19 @@ mod readability_tests {
     }
 
     #[test]
-    fn low_luminance_contrast_is_unreadable() {
-        // Light foreground on white selection
-        assert!(!Color::Rgb(205, 214, 244).is_readable_on(Color::White));
+    fn nearly_identical_colors_are_unreadable() {
+        assert!(!Color::Rgb(150, 185, 240).is_readable_on(Color::Rgb(137, 180, 250)));
+        assert!(!Color::Rgb(230, 230, 230).is_readable_on(Color::White));
+    }
+
+    #[test]
+    fn similar_lightness_but_different_hue_stays_readable() {
+        let purple = Color::Rgb(203, 166, 247);
+        // Current-branch green and local-branch blue on the purple selection
+        assert!(Color::Rgb(166, 227, 161).is_readable_on(purple));
+        assert!(Color::Rgb(137, 180, 250).is_readable_on(purple));
         // Peach on orange
-        assert!(!Color::Rgb(250, 179, 135).is_readable_on(ORANGE));
+        assert!(Color::Rgb(250, 179, 135).is_readable_on(ORANGE));
     }
 
     #[test]
