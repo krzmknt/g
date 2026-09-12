@@ -26,12 +26,10 @@ pub struct Theme {
     pub commit_refs: Color,
 }
 
-/// Glyph drawn in the gutter next to the selected row: a left and lower
-/// one-eighth block (U+1FB7C), i.e. an L whose foot meets the underline of
-/// the row's content cells instead of extending below it. Terminals that
-/// draw the Symbols for Legacy Computing block natively (WezTerm, kitty,
-/// Ghostty, Alacritty, foot, Windows Terminal) render it pixel-exact.
-pub const SELECTION_RIBBON: &str = "\u{1FB7C}";
+/// Glyph drawn in the gutter next to the selected row. The row's content
+/// cells are underlined in the same color so the ribbon's bottom edge
+/// continues to the right as a bottom border.
+pub const SELECTION_RIBBON: &str = "▌";
 
 pub const HIGHLIGHT_COLORS: &[(Color, &str)] = &[
     (Color::Rgb(255, 140, 0), "orange"),
