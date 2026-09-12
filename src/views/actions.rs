@@ -417,9 +417,7 @@ impl ActionsView {
 
             let status_color = self.status_color(run, theme);
 
-            let style = if is_selected && focused {
-                Style::new().fg(theme.selection_text).bg(theme.selection)
-            } else if is_search_match {
+            let style = if is_search_match {
                 Style::new().fg(theme.diff_hunk)
             } else if is_pr_highlight {
                 Style::new().fg(theme.foreground).bg(theme.diff_add_bg)
@@ -427,7 +425,7 @@ impl ActionsView {
                 Style::new().fg(status_color)
             };
 
-            if (is_selected && focused) || is_pr_highlight {
+            if is_pr_highlight {
                 let blank_line = " ".repeat(content_width as usize);
                 buf.set_string(inner.x, y, &blank_line, style);
             }
@@ -463,6 +461,9 @@ impl ActionsView {
 
             let display_line: String = line.chars().skip(self.h_offset).collect();
             buf.set_string_truncated(inner.x, y, &display_line, content_width, style);
+            if is_selected && focused {
+                theme.highlight_selection(buf, Rect::new(inner.x, y, content_width, 1));
+            }
         }
 
         let scrollbar = Scrollbar::new(self.runs.len(), height, self.offset);

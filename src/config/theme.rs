@@ -1,4 +1,4 @@
-use crate::tui::Color;
+use crate::tui::{Buffer, Color, Rect};
 
 #[derive(Debug, Clone)]
 pub struct Theme {
@@ -69,6 +69,12 @@ impl Theme {
         }
     }
 
+    /// Paint the selection background over `area`, keeping each cell's own
+    /// text color unless it would be unreadable on the selection color.
+    pub fn highlight_selection(&self, buf: &mut Buffer, area: Rect) {
+        buf.highlight(area, self.selection, self.selection_text);
+    }
+
     pub fn highlight_color_index(&self) -> usize {
         HIGHLIGHT_COLORS
             .iter()
@@ -122,5 +128,20 @@ mod tests {
         let mut theme = Theme::default();
         theme.selection = Color::Rgb(1, 2, 3);
         assert_eq!(theme.highlight_color_index(), 0);
+    }
+
+    #[test]
+    fn highlight_selection_keeps_readable_text_color() {
+        use crate::tui::Style;
+        let theme = Theme::default();
+        let mut buf = Buffer::empty(Rect::new(0, 0, 4, 1));
+        buf.set_string(0, 0, "ab", Style::new().fg(theme.commit_hash));
+        buf.set_string(2, 0, "cd", Style::new().fg(theme.selection));
+
+        theme.highlight_selection(&mut buf, Rect::new(0, 0, 4, 1));
+
+        assert_eq!(buf.get(0, 0).fg, Some(theme.commit_hash));
+        assert_eq!(buf.get(2, 0).fg, Some(theme.selection_text));
+        assert!((0..4).all(|x| buf.get(x, 0).bg == Some(theme.selection)));
     }
 }

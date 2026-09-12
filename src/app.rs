@@ -2064,13 +2064,12 @@ impl App {
                     let prefix = if is_selected { ">" } else { " " };
                     let option_text = format!("{}{}:{} ", prefix, key, label);
 
-                    let style = if is_selected {
-                        Style::new().fg(theme.selection_text).bg(theme.selection)
-                    } else {
-                        Style::new().fg(theme.foreground)
-                    };
-
+                    let style = Style::new().fg(theme.foreground);
                     buf.set_string(x_pos, area.y + 2, &option_text, style);
+                    if is_selected {
+                        let width = option_text.chars().count() as u16;
+                        theme.highlight_selection(buf, Rect::new(x_pos, area.y + 2, width, 1));
+                    }
                     x_pos += option_text.len() as u16 + 1;
                 }
 

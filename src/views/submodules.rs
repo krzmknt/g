@@ -157,19 +157,11 @@ impl SubmodulesView {
                 let y = inner.y + i as u16;
                 let is_selected = self.selected == self.offset + i;
 
-                let style = if is_selected && focused {
-                    Style::new().fg(theme.selection_text).bg(theme.selection)
-                } else if sm.is_initialized {
+                let style = if sm.is_initialized {
                     Style::new().fg(theme.staged)
                 } else {
                     Style::new().fg(theme.untracked)
                 };
-
-                // Fill full line width when selected and focused
-                if is_selected && focused {
-                    let blank_line = " ".repeat(content_width as usize);
-                    buf.set_string(inner.x, y, &blank_line, style);
-                }
 
                 let status = if sm.is_initialized { "✓" } else { "○" };
                 let head = sm.head.as_deref().unwrap_or("-");
@@ -177,6 +169,9 @@ impl SubmodulesView {
                 // Apply horizontal scroll
                 let display_line: String = line.chars().skip(self.h_offset).collect();
                 buf.set_string_truncated(inner.x, y, &display_line, content_width, style);
+                if is_selected && focused {
+                    theme.highlight_selection(buf, Rect::new(inner.x, y, content_width, 1));
+                }
             }
         }
 

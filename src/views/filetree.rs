@@ -562,32 +562,17 @@ impl FileTreeView {
                     }
                 };
 
-                let style = if is_selected && focused {
-                    Style::new().fg(theme.selection_text).bg(theme.selection)
-                } else if is_search_match {
+                let style = if is_search_match {
                     Style::new().fg(theme.diff_hunk)
                 } else {
                     Style::new().fg(name_color)
                 };
 
-                // Fill full line width when selected and focused
-                if is_selected && focused {
-                    let blank_line = " ".repeat(content_width as usize);
-                    buf.set_string(inner.x, y, &blank_line, style);
-                }
-                let icon_style = if is_selected && focused {
-                    Style::new().fg(icon_color).bg(theme.selection)
-                } else {
-                    Style::new().fg(icon_color)
-                };
+                let icon_style = Style::new().fg(icon_color);
 
                 // Draw vertical edge lines (light gray)
                 // Use │ for continuing edges, ╵ for last child at each depth
-                let edge_style = if is_selected && focused {
-                    style
-                } else {
-                    Style::new().fg(edge_color)
-                };
+                let edge_style = Style::new().fg(edge_color);
 
                 // Build edge string based on is_last_at_depth
                 // Each depth level = 3 chars: " X " where X is │ or ╵
@@ -608,13 +593,7 @@ impl FileTreeView {
                 let icon_with_space = format!(" {}  ", icon);
 
                 // Status sign style
-                let status_style = if is_selected && focused {
-                    Style::new()
-                        .fg(status_sign_color.unwrap_or(theme.foreground))
-                        .bg(theme.selection)
-                } else {
-                    Style::new().fg(status_sign_color.unwrap_or(theme.foreground))
-                };
+                let status_style = Style::new().fg(status_sign_color.unwrap_or(theme.foreground));
 
                 // Apply horizontal scroll
                 if self.h_offset < edge_width {
@@ -707,6 +686,10 @@ impl FileTreeView {
                             buf.set_string(x_pos, y, &display_text, status_style);
                         }
                     }
+                }
+
+                if is_selected && focused {
+                    theme.highlight_selection(buf, Rect::new(inner.x, y, content_width, 1));
                 }
             }
         }

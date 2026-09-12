@@ -490,9 +490,7 @@ impl StatusView {
                 let is_search_match = self.is_search_match(Section::Staged, i);
                 let status_char = entry.staged.symbol();
                 let line = format!("  {}  {}", status_char, entry.path);
-                let style = if is_selected && focused {
-                    Style::new().fg(theme.selection_text).bg(theme.selection)
-                } else if is_search_match {
+                let style = if is_search_match {
                     Style::new().fg(theme.diff_hunk)
                 } else {
                     Style::new().fg(theme.staged)
@@ -513,9 +511,7 @@ impl StatusView {
                 let status_char = entry.unstaged.symbol();
                 let status_color = Self::status_color(status_char, theme);
                 let line = format!("  {}  {}", status_char, entry.path);
-                let style = if is_selected && focused {
-                    Style::new().fg(theme.selection_text).bg(theme.selection)
-                } else if is_search_match {
+                let style = if is_search_match {
                     Style::new().fg(theme.diff_hunk)
                 } else {
                     Style::new().fg(status_color)
@@ -536,9 +532,7 @@ impl StatusView {
                 let status_char = entry.unstaged.symbol();
                 let status_color = Self::status_color(status_char, theme);
                 let line = format!("  {}  {}", status_char, entry.path);
-                let style = if is_selected && focused {
-                    Style::new().fg(theme.selection_text).bg(theme.selection)
-                } else if is_search_match {
+                let style = if is_search_match {
                     Style::new().fg(theme.diff_hunk)
                 } else {
                     Style::new().fg(status_color)
@@ -576,14 +570,12 @@ impl StatusView {
             .enumerate()
         {
             let y = inner.y + i as u16;
-            // Fill full line width with background color when highlighted
-            if *is_highlighted {
-                let blank_line = " ".repeat(content_width as usize);
-                buf.set_string(inner.x, y, &blank_line, *style);
-            }
             // Apply horizontal scroll
             let display_line: String = line.chars().skip(self.h_offset).collect();
             buf.set_string_truncated(inner.x, y, &display_line, content_width, *style);
+            if *is_highlighted {
+                theme.highlight_selection(buf, Rect::new(inner.x, y, content_width, 1));
+            }
         }
 
         // Render scrollbar

@@ -173,6 +173,20 @@ impl Buffer {
         }
     }
 
+    /// Paint a selection background over `area`, keeping each cell's own
+    /// foreground color unless it would be unreadable on `bg`.
+    pub fn highlight(&mut self, area: super::render::Rect, bg: Color, fallback_fg: Color) {
+        let area = self.area.intersection(area);
+        for y in area.y..area.y + area.height {
+            for x in area.x..area.x + area.width {
+                let cell = self.get_mut(x, y);
+                let style = cell.style().on_background(bg, fallback_fg);
+                cell.fg = style.fg;
+                cell.bg = style.bg;
+            }
+        }
+    }
+
     pub fn clear(&mut self) {
         for cell in &mut self.cells {
             cell.reset();
@@ -227,4 +241,47 @@ pub fn unicode_width(c: char) -> usize {
 /// Calculate display width of a string (accounting for wide characters)
 pub fn str_display_width(s: &str) -> usize {
     s.chars().map(unicode_width).sum()
+}
+
+#[cfg(test)]
+mod highlight_tests {
+    use super::*;
+    use crate::tui::Rect;
+
+    const ORANGE: Color = Color::Rgb(255, 140, 0);
+
+    #[test]
+    fn highlight_sets_bg_on_every_cell_and_fixes_unreadable_fg() {
+        let mut buf = Buffer::empty(Rect::new(0, 0, 6, 2));
+        buf.set_string(0, 0, "ab", Style::new().fg(Color::Rgb(137, 220, 235)));
+        buf.set_string(
+            2,
+            0,
+            "cd",
+            Style::new().fg(ORANGE).bg(Color::Rgb(30, 60, 30)),
+        );
+        buf.set_string(0, 1, "xy", Style::new().fg(ORANGE));
+
+        buf.highlight(Rect::new(0, 0, 5, 1), ORANGE, Color::Black);
+
+        for x in 0..5 {
+            assert_eq!(buf.get(x, 0).bg, Some(ORANGE), "bg at x={}", x);
+        }
+        assert_eq!(buf.get(0, 0).fg, Some(Color::Rgb(137, 220, 235)));
+        assert_eq!(buf.get(2, 0).fg, Some(Color::Black));
+        assert_eq!(buf.get(4, 0).fg, Some(Color::Black));
+        // Outside the area is untouched
+        assert_eq!(buf.get(5, 0).bg, None);
+        assert_eq!(buf.get(0, 1).bg, None);
+        assert_eq!(buf.get(0, 1).fg, Some(ORANGE));
+    }
+
+    #[test]
+    fn highlight_clips_to_buffer_area() {
+        let mut buf = Buffer::empty(Rect::new(0, 0, 3, 1));
+        buf.highlight(Rect::new(1, 0, 10, 5), ORANGE, Color::Black);
+        assert_eq!(buf.get(0, 0).bg, None);
+        assert_eq!(buf.get(1, 0).bg, Some(ORANGE));
+        assert_eq!(buf.get(2, 0).bg, Some(ORANGE));
+    }
 }

@@ -204,25 +204,20 @@ impl TagsView {
                 let is_selected = self.selected == self.offset + i;
                 let is_search_match = self.search_results.contains(&(self.offset + i));
 
-                let style = if is_selected && focused {
-                    Style::new().fg(theme.selection_text).bg(theme.selection)
-                } else if is_search_match {
+                let style = if is_search_match {
                     Style::new().fg(theme.diff_hunk)
                 } else {
                     Style::new().fg(theme.branch_local)
                 };
-
-                // Fill full line width when selected and focused
-                if is_selected && focused {
-                    let blank_line = " ".repeat(content_width as usize);
-                    buf.set_string(inner.x, y, &blank_line, style);
-                }
 
                 let icon = if tag.is_annotated { "󰓹 " } else { "󰓻 " };
                 let line = format!("{}{} {}", icon, tag.target, tag.name);
                 // Apply horizontal scroll
                 let display_line: String = line.chars().skip(self.h_offset).collect();
                 buf.set_string_truncated(inner.x, y, &display_line, content_width, style);
+                if is_selected && focused {
+                    theme.highlight_selection(buf, Rect::new(inner.x, y, content_width, 1));
+                }
             }
         }
 

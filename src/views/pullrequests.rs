@@ -359,18 +359,11 @@ impl PullRequestsView {
                 }
             };
 
-            let style = if is_selected && focused {
-                Style::new().fg(theme.selection_text).bg(theme.selection)
-            } else if is_search_match {
+            let style = if is_search_match {
                 Style::new().fg(theme.diff_hunk)
             } else {
                 Style::new().fg(state_color)
             };
-
-            if is_selected && focused {
-                let blank_line = " ".repeat(content_width as usize);
-                buf.set_string(inner.x, y, &blank_line, style);
-            }
 
             let state_display = if pr.is_draft {
                 "DRAFT".to_string()
@@ -392,6 +385,9 @@ impl PullRequestsView {
 
             let display_line: String = line.chars().skip(self.h_offset).collect();
             buf.set_string_truncated(inner.x, y, &display_line, content_width, style);
+            if is_selected && focused {
+                theme.highlight_selection(buf, Rect::new(inner.x, y, content_width, 1));
+            }
         }
 
         let scrollbar = Scrollbar::new(self.prs.len(), height, self.offset);

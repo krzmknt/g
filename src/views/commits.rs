@@ -517,9 +517,7 @@ impl CommitsView {
             let is_pr_highlight = self.is_highlighted(&commit.id, &commit.refs);
             let is_marked = self.is_marked(&commit.id);
 
-            let base_style = if is_selected && focused {
-                Style::new().fg(theme.selection_text).bg(theme.selection)
-            } else if is_marked {
+            let base_style = if is_marked {
                 Style::new().fg(theme.foreground).bg(theme.diff_remove_bg)
             } else if is_search_match {
                 Style::new().fg(theme.diff_hunk)
@@ -530,7 +528,7 @@ impl CommitsView {
             };
 
             // Fill full line width when selected/focused, marked, or PR highlighted
-            if (is_selected && focused) || is_marked || is_pr_highlight {
+            if is_marked || is_pr_highlight {
                 let blank_line = " ".repeat(content_width as usize);
                 buf.set_string(inner.x, y, &blank_line, base_style);
             }
@@ -556,16 +554,12 @@ impl CommitsView {
             // Right-align time (gray)
             if self.h_offset == 0 {
                 let time_x = inner.x + content_width.saturating_sub(time_len as u16);
-                let time_style = if is_selected && focused {
-                    base_style
-                } else {
-                    Style::new().fg(theme.commit_time)
-                };
+                let time_style = Style::new().fg(theme.commit_time);
                 buf.set_string(time_x, y, &time_str, time_style);
             }
 
             // Overlay colored parts if not selected and not highlighted
-            if !(is_search_match || is_pr_highlight || is_selected && focused) {
+            if !(is_search_match || is_pr_highlight) {
                 self.render_compact_colors(
                     buf,
                     inner.x,
@@ -574,6 +568,10 @@ impl CommitsView {
                     commit,
                     theme,
                 );
+            }
+
+            if is_selected && focused {
+                theme.highlight_selection(buf, Rect::new(inner.x, y, content_width, 1));
             }
         }
     }
@@ -623,9 +621,7 @@ impl CommitsView {
             let is_pr_highlight = self.is_highlighted(&commit.id, &commit.refs);
             let is_marked = self.is_marked(&commit.id);
 
-            let base_style = if is_selected && focused {
-                Style::new().fg(theme.selection_text).bg(theme.selection)
-            } else if is_marked {
+            let base_style = if is_marked {
                 Style::new().fg(theme.foreground).bg(theme.diff_remove_bg)
             } else if is_search_match {
                 Style::new().fg(theme.diff_hunk)
@@ -636,7 +632,7 @@ impl CommitsView {
             };
 
             // Fill full line width when selected/focused, marked, or PR highlighted
-            if (is_selected && focused) || is_marked || is_pr_highlight {
+            if is_marked || is_pr_highlight {
                 let blank_line = " ".repeat(content_width as usize);
                 buf.set_string(inner.x, y, &blank_line, base_style);
             }
@@ -673,16 +669,12 @@ impl CommitsView {
             // Right-align time (gray)
             if self.h_offset == 0 {
                 let time_x = inner.x + content_width.saturating_sub(time_len as u16);
-                let time_style = if is_selected && focused {
-                    base_style
-                } else {
-                    Style::new().fg(theme.commit_time)
-                };
+                let time_style = Style::new().fg(theme.commit_time);
                 buf.set_string(time_x, y, &time_str, time_style);
             }
 
             // Overlay colored parts if not selected
-            if !(is_search_match || is_selected && focused) {
+            if !is_search_match {
                 self.render_detailed_colors(
                     buf,
                     inner.x,
@@ -693,6 +685,10 @@ impl CommitsView {
                     &author_truncated,
                     theme,
                 );
+            }
+
+            if is_selected && focused {
+                theme.highlight_selection(buf, Rect::new(inner.x, y, content_width, 1));
             }
         }
     }
@@ -1090,39 +1086,26 @@ impl CommitsView {
             match line {
                 GraphLine::Connector(graph_str) => {
                     // Connector-only line (e.g., "|\", "|/")
-                    let base_style = if is_selected && focused {
-                        Style::new().fg(theme.selection_text).bg(theme.selection)
-                    } else {
-                        Style::new().fg(theme.foreground)
-                    };
-
-                    if is_selected && focused {
-                        let blank_line = " ".repeat(content_width as usize);
-                        buf.set_string(inner.x, y, &blank_line, base_style);
-                    }
+                    let base_style = Style::new().fg(theme.foreground);
 
                     let display_str: String = graph_str.chars().skip(self.h_offset).collect();
                     buf.set_string_truncated(inner.x, y, &display_str, content_width, base_style);
 
                     // Color the graph characters
-                    if !(is_selected && focused) {
-                        self.render_connector_colors(
-                            buf,
-                            inner.x,
-                            y,
-                            content_width,
-                            graph_str,
-                            &graph_colors,
-                        );
-                    }
+                    self.render_connector_colors(
+                        buf,
+                        inner.x,
+                        y,
+                        content_width,
+                        graph_str,
+                        &graph_colors,
+                    );
                 }
                 GraphLine::Commit(commit) => {
                     let is_pr_highlight = self.is_highlighted(&commit.id, &commit.refs);
                     let is_marked = self.is_marked(&commit.id);
 
-                    let base_style = if is_selected && focused {
-                        Style::new().fg(theme.selection_text).bg(theme.selection)
-                    } else if is_marked {
+                    let base_style = if is_marked {
                         Style::new().fg(theme.foreground).bg(theme.diff_remove_bg)
                     } else if is_search_match {
                         Style::new().fg(theme.diff_hunk)
@@ -1133,7 +1116,7 @@ impl CommitsView {
                     };
 
                     // Fill full line width when selected/focused, marked, or PR highlighted
-                    if (is_selected && focused) || is_marked || is_pr_highlight {
+                    if is_marked || is_pr_highlight {
                         let blank_line = " ".repeat(content_width as usize);
                         buf.set_string(inner.x, y, &blank_line, base_style);
                     }
@@ -1176,16 +1159,12 @@ impl CommitsView {
                     // Right-align time (gray)
                     if self.h_offset == 0 {
                         let time_x = inner.x + content_width.saturating_sub(time_len as u16);
-                        let time_style = if is_selected && focused {
-                            base_style
-                        } else {
-                            Style::new().fg(theme.commit_time)
-                        };
+                        let time_style = Style::new().fg(theme.commit_time);
                         buf.set_string(time_x, y, &time_str, time_style);
                     }
 
                     // Overlay colored parts if not selected
-                    if !(is_search_match || is_selected && focused) {
+                    if !is_search_match {
                         self.render_graph_colors(
                             buf,
                             inner.x,
@@ -1198,6 +1177,10 @@ impl CommitsView {
                         );
                     }
                 }
+            }
+
+            if is_selected && focused {
+                theme.highlight_selection(buf, Rect::new(inner.x, y, content_width, 1));
             }
         }
     }
