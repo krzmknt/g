@@ -119,12 +119,6 @@ impl BlameView {
         }
 
         let height = inner.height as usize;
-        // The focused selection needs one extra row for its bottom border
-        let height = if focused && height > 1 {
-            height - 1
-        } else {
-            height
-        };
 
         let Some(ref blame) = self.blame else {
             let msg = "Select a file to view blame";
@@ -177,13 +171,7 @@ impl BlameView {
             .take(height)
             .enumerate()
         {
-            let y = inner.y
-                + i as u16
-                + if focused && self.offset + i > self.selected {
-                    1
-                } else {
-                    0
-                };
+            let y = inner.y + i as u16;
             let is_selected = self.selected == self.offset + i;
 
             let base_style = Style::new().fg(theme.foreground);

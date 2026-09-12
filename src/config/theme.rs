@@ -26,12 +26,10 @@ pub struct Theme {
     pub commit_refs: Color,
 }
 
-/// Glyph drawn in the gutter next to the selected row.
+/// Glyph drawn in the gutter next to the selected row. The row's content
+/// cells are underlined in the same color so the ribbon's bottom edge
+/// continues to the right as a bottom border.
 pub const SELECTION_RIBBON: &str = "▌";
-/// Glyph repeated on the row below the selected row: an upper one-eighth
-/// block, so the line hugs the bottom of the selected row and continues the
-/// ribbon's bottom edge to the right.
-pub const SELECTION_BORDER: &str = "▔";
 
 pub const HIGHLIGHT_COLORS: &[(Color, &str)] = &[
     (Color::Rgb(255, 140, 0), "orange"),
@@ -75,23 +73,16 @@ impl Theme {
     }
 
     /// Mark a row as selected: a ribbon is drawn in the one-column `gutter`
-    /// and a bottom border in the same color is drawn on the row below,
-    /// spanning from the gutter to the end of `row`. Both are block glyphs
-    /// in the selection color, so the result does not depend on text colors
-    /// or terminal underline support. Callers must leave the row below the
-    /// selected row free; nothing is drawn there if it lies outside `gutter`.
+    /// and `row` (the row's content cells) gets a bottom border in the
+    /// selection color. The two join at the bottom-left corner. Text colors
+    /// are untouched.
     pub fn mark_selected_row(&self, buf: &mut Buffer, gutter: Rect, row: Rect) {
         if gutter.width == 0 || row.y < gutter.y || row.y >= gutter.bottom() {
             return;
         }
-        let style = Style::new().fg(self.selection);
-        buf.set_string(gutter.x, row.y, SELECTION_RIBBON, style);
-
-        let border_y = row.y + 1;
-        if border_y < gutter.bottom() {
-            let width = row.right().saturating_sub(gutter.x) as usize;
-            buf.set_string(gutter.x, border_y, SELECTION_BORDER.repeat(width), style);
-        }
+        let border = Style::new().underline().underline_color(self.selection);
+        buf.set_string(gutter.x, row.y, SELECTION_RIBBON, border.fg(self.selection));
+        buf.set_style(Rect::new(row.x, row.y, row.width, 1), border);
     }
 
     pub fn highlight_color_index(&self) -> usize {
@@ -150,12 +141,12 @@ mod tests {
     }
 
     #[test]
-    fn mark_selected_row_draws_ribbon_and_border_row_below() {
+    fn mark_selected_row_draws_ribbon_and_underlines_the_row() {
         use crate::tui::{Modifier, Style};
         let theme = Theme::default();
-        let mut buf = Buffer::empty(Rect::new(0, 0, 6, 4));
+        let mut buf = Buffer::empty(Rect::new(0, 0, 5, 3));
         buf.set_string(1, 1, "ab", Style::new().fg(theme.commit_hash));
-        let gutter = Rect::new(0, 0, 1, 4);
+        let gutter = Rect::new(0, 0, 1, 3);
         let row = Rect::new(1, 1, 3, 1);
 
         theme.mark_selected_row(&mut buf, gutter, row);
@@ -163,42 +154,26 @@ mod tests {
         let ribbon = buf.get(0, 1);
         assert_eq!(ribbon.symbol, SELECTION_RIBBON);
         assert_eq!(ribbon.fg, Some(theme.selection));
+        assert!(ribbon.modifier.contains(Modifier::UNDERLINE));
+        assert_eq!(ribbon.underline_color, Some(theme.selection));
 
-        // Border row directly below, from the gutter to the end of the row
-        for x in 0..4 {
-            let cell = buf.get(x, 2);
-            assert_eq!(cell.symbol, SELECTION_BORDER, "x={}", x);
-            assert_eq!(cell.fg, Some(theme.selection));
+        for x in 1..4 {
+            let cell = buf.get(x, 1);
+            assert!(cell.modifier.contains(Modifier::UNDERLINE), "x={}", x);
+            assert_eq!(cell.underline_color, Some(theme.selection));
             assert_eq!(cell.bg, None);
         }
-        assert_eq!(buf.get(4, 2).symbol, " ");
-
-        // Text and its color are untouched, no attributes added
-        assert_eq!(buf.get(1, 1).symbol, "a");
         assert_eq!(buf.get(1, 1).fg, Some(theme.commit_hash));
-        assert_eq!(buf.get(1, 1).modifier, Modifier::empty());
-        assert_eq!(buf.get(1, 0).symbol, " ");
-        assert_eq!(buf.get(1, 3).symbol, " ");
+        assert_eq!(buf.get(4, 1).modifier, Modifier::empty());
+        assert_eq!(buf.get(1, 0).modifier, Modifier::empty());
+        assert_eq!(buf.get(0, 0).symbol, " ");
     }
 
     #[test]
-    fn mark_selected_row_skips_border_when_row_below_is_outside_gutter() {
-        let theme = Theme::default();
-        let mut buf = Buffer::empty(Rect::new(0, 0, 4, 3));
-
-        theme.mark_selected_row(&mut buf, Rect::new(0, 0, 1, 2), Rect::new(1, 1, 3, 1));
-
-        assert_eq!(buf.get(0, 1).symbol, SELECTION_RIBBON);
-        assert!((0..4).all(|x| buf.get(x, 2).symbol == " "));
-    }
-
-    #[test]
-    fn selection_glyphs_are_single_narrow_cells() {
+    fn selection_ribbon_is_a_single_narrow_cell() {
         use crate::tui::str_display_width;
-        for glyph in [SELECTION_RIBBON, SELECTION_BORDER] {
-            assert_eq!(glyph.chars().count(), 1);
-            assert_eq!(str_display_width(glyph), 1);
-        }
+        assert_eq!(SELECTION_RIBBON.chars().count(), 1);
+        assert_eq!(str_display_width(SELECTION_RIBBON), 1);
     }
 
     #[test]

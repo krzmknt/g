@@ -475,12 +475,6 @@ impl StatusView {
         }
 
         let visible_height = inner.height as usize;
-        // The focused selection needs one extra row for its bottom border
-        let visible_height = if focused && visible_height > 1 {
-            visible_height - 1
-        } else {
-            visible_height
-        };
         self.ensure_visible(visible_height);
 
         // Build all lines
@@ -570,20 +564,13 @@ impl StatusView {
             }
         }
 
-        let highlighted_index = lines.iter().position(|(_, _, h)| *h);
         for (i, (line, style, is_highlighted)) in lines
             .iter()
             .skip(self.scroll)
             .take(visible_height)
             .enumerate()
         {
-            let y = inner.y
-                + i as u16
-                + if highlighted_index.is_some_and(|h| self.scroll + i > h) {
-                    1
-                } else {
-                    0
-                };
+            let y = inner.y + i as u16;
             // Apply horizontal scroll
             let display_line: String = line.chars().skip(self.h_offset).collect();
             buf.set_string_truncated(inner.x, y, &display_line, content_width, *style);

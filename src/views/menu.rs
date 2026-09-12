@@ -165,10 +165,11 @@ impl MenuView {
         }
 
         for (i, panel) in self.panels.iter().enumerate() {
-            let y = inner.y + i as u16 + if i > self.selected { 1 } else { 0 };
-            if y >= inner.bottom() {
+            if i >= inner.height as usize {
                 break;
             }
+
+            let y = inner.y + i as u16;
             let is_selected = self.selected == i;
             let is_current = current_panel == Some(*panel);
 

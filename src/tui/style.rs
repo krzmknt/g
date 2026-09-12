@@ -5,6 +5,9 @@ pub struct Style {
     pub fg: Option<Color>,
     pub bg: Option<Color>,
     pub modifier: Modifier,
+    /// Color of the underline (SGR 58). Terminals without support fall back
+    /// to the text color.
+    pub underline_color: Option<Color>,
 }
 
 impl Style {
@@ -13,6 +16,7 @@ impl Style {
             fg: None,
             bg: None,
             modifier: Modifier::empty(),
+            underline_color: None,
         }
     }
 
@@ -51,6 +55,11 @@ impl Style {
         self
     }
 
+    pub const fn underline_color(mut self, color: Color) -> Self {
+        self.underline_color = Some(color);
+        self
+    }
+
     pub fn to_ansi(self) -> String {
         let mut result = String::with_capacity(32);
         result.push_str("\x1b[0m"); // Reset first
@@ -66,6 +75,9 @@ impl Style {
         }
         if self.modifier.contains(Modifier::UNDERLINE) {
             result.push_str("\x1b[4m");
+            if let Some(color) = self.underline_color {
+                let _ = write!(result, "{}", color.to_ansi_underline());
+            }
         }
         if self.modifier.contains(Modifier::REVERSED) {
             result.push_str("\x1b[7m");
@@ -106,6 +118,31 @@ pub enum Color {
 }
 
 impl Color {
+    /// SGR 58 underline color sequence.
+    pub fn to_ansi_underline(self) -> String {
+        let index = match self {
+            Color::Reset => return "\x1b[59m".to_string(),
+            Color::Rgb(r, g, b) => return format!("\x1b[58;2;{};{};{}m", r, g, b),
+            Color::Indexed(n) => n,
+            Color::Black => 0,
+            Color::Red => 1,
+            Color::Green => 2,
+            Color::Yellow => 3,
+            Color::Blue => 4,
+            Color::Magenta => 5,
+            Color::Cyan => 6,
+            Color::White => 7,
+            Color::Gray | Color::DarkGray => 8,
+            Color::LightRed => 9,
+            Color::LightGreen => 10,
+            Color::LightYellow => 11,
+            Color::LightBlue => 12,
+            Color::LightMagenta => 13,
+            Color::LightCyan => 14,
+        };
+        format!("\x1b[58;5;{}m", index)
+    }
+
     pub fn to_ansi_fg(self) -> String {
         match self {
             Color::Reset => "\x1b[39m".to_string(),
@@ -195,5 +232,27 @@ impl Modifier {
 
     pub const fn union(self, other: Self) -> Self {
         Self(self.0 | other.0)
+    }
+}
+
+#[cfg(test)]
+mod underline_tests {
+    use super::*;
+
+    #[test]
+    fn underline_color_is_emitted_after_underline() {
+        let style = Style::new()
+            .underline()
+            .underline_color(Color::Rgb(203, 166, 247));
+        assert_eq!(style.underline_color, Some(Color::Rgb(203, 166, 247)));
+        assert_eq!(style.to_ansi(), "\x1b[0m\x1b[4m\x1b[58;2;203;166;247m");
+    }
+
+    #[test]
+    fn underline_color_variants_map_to_sgr_58() {
+        assert_eq!(Color::Rgb(1, 2, 3).to_ansi_underline(), "\x1b[58;2;1;2;3m");
+        assert_eq!(Color::Indexed(42).to_ansi_underline(), "\x1b[58;5;42m");
+        assert_eq!(Color::LightRed.to_ansi_underline(), "\x1b[58;5;9m");
+        assert_eq!(Color::Reset.to_ansi_underline(), "\x1b[59m");
     }
 }

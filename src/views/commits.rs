@@ -396,12 +396,6 @@ impl CommitsView {
 
         // Adjust offset
         let height = inner.height as usize;
-        // The focused selection needs one extra row for its bottom border
-        let height = if focused && height > 1 {
-            height - 1
-        } else {
-            height
-        };
         if self.selected < self.offset {
             self.offset = self.selected;
         } else if self.selected >= self.offset + height {
@@ -520,13 +514,7 @@ impl CommitsView {
             .take(height)
             .enumerate()
         {
-            let y = inner.y
-                + i as u16
-                + if focused && self.offset + i > self.selected {
-                    1
-                } else {
-                    0
-                };
+            let y = inner.y + i as u16;
             let is_selected = self.selected == self.offset + i;
             let is_search_match = self.search_results.contains(&(self.offset + i));
             let is_pr_highlight = self.is_highlighted(&commit.id, &commit.refs);
@@ -632,13 +620,7 @@ impl CommitsView {
             .take(height)
             .enumerate()
         {
-            let y = inner.y
-                + i as u16
-                + if focused && self.offset + i > self.selected {
-                    1
-                } else {
-                    0
-                };
+            let y = inner.y + i as u16;
             let is_selected = self.selected == self.offset + i;
             let is_search_match = self.search_results.contains(&(self.offset + i));
             let is_pr_highlight = self.is_highlighted(&commit.id, &commit.refs);
@@ -1104,13 +1086,7 @@ impl CommitsView {
             .take(height)
             .enumerate()
         {
-            let y = inner.y
-                + i as u16
-                + if focused && self.offset + i > self.selected {
-                    1
-                } else {
-                    0
-                };
+            let y = inner.y + i as u16;
             let is_selected = self.selected == self.offset + i;
             let is_search_match = self.search_results.contains(&(self.offset + i));
 
