@@ -217,7 +217,7 @@ impl TagsView {
                 let display_line: String = line.chars().skip(self.h_offset).collect();
                 buf.set_string_truncated(inner.x, y, &display_line, content_width, style);
                 if is_selected && focused {
-                    theme.mark_selected_row(buf, gutter, y);
+                    theme.mark_selected_row(buf, gutter, Rect::new(inner.x, y, content_width, 1));
                 }
             }
         }

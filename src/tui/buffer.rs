@@ -6,6 +6,7 @@ pub struct Cell {
     pub fg: Option<Color>,
     pub bg: Option<Color>,
     pub modifier: Modifier,
+    pub underline_color: Option<Color>,
 }
 
 impl Default for Cell {
@@ -15,6 +16,7 @@ impl Default for Cell {
             fg: None,
             bg: None,
             modifier: Modifier::empty(),
+            underline_color: None,
         }
     }
 }
@@ -40,6 +42,9 @@ impl Cell {
             self.bg = Some(bg);
         }
         self.modifier = self.modifier.union(style.modifier);
+        if let Some(color) = style.underline_color {
+            self.underline_color = Some(color);
+        }
         self
     }
 
@@ -48,6 +53,7 @@ impl Cell {
             fg: self.fg,
             bg: self.bg,
             modifier: self.modifier,
+            underline_color: self.underline_color,
         }
     }
 
@@ -57,6 +63,7 @@ impl Cell {
         self.fg = None;
         self.bg = None;
         self.modifier = Modifier::empty();
+        self.underline_color = None;
     }
 }
 
@@ -227,4 +234,24 @@ pub fn unicode_width(c: char) -> usize {
 /// Calculate display width of a string (accounting for wide characters)
 pub fn str_display_width(s: &str) -> usize {
     s.chars().map(unicode_width).sum()
+}
+
+#[cfg(test)]
+mod cell_tests {
+    use super::*;
+
+    #[test]
+    fn set_style_merges_underline_color_and_reset_clears_it() {
+        let mut cell = Cell::default();
+        cell.set_style(Style::new().fg(Color::Red));
+        cell.set_style(Style::new().underline().underline_color(Color::Blue));
+
+        assert_eq!(cell.fg, Some(Color::Red));
+        assert_eq!(cell.underline_color, Some(Color::Blue));
+        assert!(cell.modifier.contains(Modifier::UNDERLINE));
+        assert_eq!(cell.style().underline_color, Some(Color::Blue));
+
+        cell.reset();
+        assert_eq!(cell.underline_color, None);
+    }
 }

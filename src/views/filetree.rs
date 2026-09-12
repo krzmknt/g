@@ -690,7 +690,7 @@ impl FileTreeView {
                 }
 
                 if is_selected && focused {
-                    theme.mark_selected_row(buf, gutter, y);
+                    theme.mark_selected_row(buf, gutter, Rect::new(inner.x, y, content_width, 1));
                 }
             }
         }

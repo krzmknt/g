@@ -70,18 +70,17 @@ impl Theme {
         }
     }
 
-    /// Mark row `y` as selected by drawing a ribbon in the one-column
-    /// `gutter` to the left of the row's content. Text colors are untouched.
-    pub fn mark_selected_row(&self, buf: &mut Buffer, gutter: Rect, y: u16) {
-        if gutter.width == 0 || y < gutter.y || y >= gutter.bottom() {
+    /// Mark a row as selected: a ribbon is drawn in the one-column `gutter`
+    /// and `row` (the row's content cells) gets a bottom border in the
+    /// selection color. The two join at the bottom-left corner. Text colors
+    /// are untouched.
+    pub fn mark_selected_row(&self, buf: &mut Buffer, gutter: Rect, row: Rect) {
+        if gutter.width == 0 || row.y < gutter.y || row.y >= gutter.bottom() {
             return;
         }
-        buf.set_string(
-            gutter.x,
-            y,
-            SELECTION_RIBBON,
-            Style::new().fg(self.selection),
-        );
+        let border = Style::new().underline().underline_color(self.selection);
+        buf.set_string(gutter.x, row.y, SELECTION_RIBBON, border.fg(self.selection));
+        buf.set_style(Rect::new(row.x, row.y, row.width, 1), border);
     }
 
     pub fn highlight_color_index(&self) -> usize {
@@ -140,19 +139,32 @@ mod tests {
     }
 
     #[test]
-    fn mark_selected_row_draws_ribbon_in_gutter_only() {
+    fn mark_selected_row_draws_ribbon_and_underlines_the_row() {
+        use crate::tui::{Modifier, Style};
         let theme = Theme::default();
-        let mut buf = Buffer::empty(Rect::new(0, 0, 4, 3));
+        let mut buf = Buffer::empty(Rect::new(0, 0, 5, 3));
+        buf.set_string(1, 1, "ab", Style::new().fg(theme.commit_hash));
         let gutter = Rect::new(0, 0, 1, 3);
+        let row = Rect::new(1, 1, 3, 1);
 
-        theme.mark_selected_row(&mut buf, gutter, 1);
+        theme.mark_selected_row(&mut buf, gutter, row);
 
-        assert_eq!(buf.get(0, 1).symbol, SELECTION_RIBBON);
-        assert_eq!(buf.get(0, 1).fg, Some(theme.selection));
-        assert_eq!(buf.get(0, 1).bg, None);
+        let ribbon = buf.get(0, 1);
+        assert_eq!(ribbon.symbol, SELECTION_RIBBON);
+        assert_eq!(ribbon.fg, Some(theme.selection));
+        assert!(ribbon.modifier.contains(Modifier::UNDERLINE));
+        assert_eq!(ribbon.underline_color, Some(theme.selection));
+
+        for x in 1..4 {
+            let cell = buf.get(x, 1);
+            assert!(cell.modifier.contains(Modifier::UNDERLINE), "x={}", x);
+            assert_eq!(cell.underline_color, Some(theme.selection));
+            assert_eq!(cell.bg, None);
+        }
+        assert_eq!(buf.get(1, 1).fg, Some(theme.commit_hash));
+        assert_eq!(buf.get(4, 1).modifier, Modifier::empty());
+        assert_eq!(buf.get(1, 0).modifier, Modifier::empty());
         assert_eq!(buf.get(0, 0).symbol, " ");
-        assert_eq!(buf.get(0, 2).symbol, " ");
-        assert_eq!(buf.get(1, 1).symbol, " ");
     }
 
     #[test]
@@ -160,8 +172,8 @@ mod tests {
         let theme = Theme::default();
         let mut buf = Buffer::empty(Rect::new(0, 0, 4, 3));
 
-        theme.mark_selected_row(&mut buf, Rect::new(0, 0, 0, 3), 1);
-        theme.mark_selected_row(&mut buf, Rect::new(0, 0, 1, 2), 2);
+        theme.mark_selected_row(&mut buf, Rect::new(0, 0, 0, 3), Rect::new(0, 1, 4, 1));
+        theme.mark_selected_row(&mut buf, Rect::new(0, 0, 1, 2), Rect::new(1, 2, 3, 1));
 
         assert!(buf.cells.iter().all(|c| c.symbol == " "));
     }

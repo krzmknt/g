@@ -183,7 +183,7 @@ impl MenuView {
             let line = format!("{}{} {}", marker, panel.shortcut(), panel.name());
             buf.set_string_truncated(inner.x, y, &line, inner.width, style);
             if is_selected {
-                theme.mark_selected_row(buf, gutter, y);
+                theme.mark_selected_row(buf, gutter, Rect::new(inner.x, y, inner.width, 1));
             }
         }
     }
