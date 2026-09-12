@@ -26,9 +26,7 @@ pub struct Theme {
     pub commit_refs: Color,
 }
 
-/// Glyph drawn in the gutter next to the selected row. The row's content
-/// cells are underlined in the same color so the ribbon's bottom edge
-/// continues to the right as a bottom border.
+/// Glyph drawn in the gutter next to the selected row.
 pub const SELECTION_RIBBON: &str = "▌";
 
 pub const HIGHLIGHT_COLORS: &[(Color, &str)] = &[
@@ -73,16 +71,18 @@ impl Theme {
     }
 
     /// Mark a row as selected: a ribbon is drawn in the one-column `gutter`
-    /// and `row` (the row's content cells) gets a bottom border in the
-    /// selection color. The two join at the bottom-left corner. Text colors
-    /// are untouched.
+    /// and the row's content cells are made bold. Text colors are untouched.
     pub fn mark_selected_row(&self, buf: &mut Buffer, gutter: Rect, row: Rect) {
         if gutter.width == 0 || row.y < gutter.y || row.y >= gutter.bottom() {
             return;
         }
-        let border = Style::new().underline().underline_color(self.selection);
-        buf.set_string(gutter.x, row.y, SELECTION_RIBBON, border.fg(self.selection));
-        buf.set_style(Rect::new(row.x, row.y, row.width, 1), border);
+        buf.set_string(
+            gutter.x,
+            row.y,
+            SELECTION_RIBBON,
+            Style::new().fg(self.selection),
+        );
+        buf.set_style(Rect::new(row.x, row.y, row.width, 1), Style::new().bold());
     }
 
     pub fn highlight_color_index(&self) -> usize {
@@ -141,7 +141,7 @@ mod tests {
     }
 
     #[test]
-    fn mark_selected_row_draws_ribbon_and_underlines_the_row() {
+    fn mark_selected_row_draws_ribbon_and_bolds_the_row() {
         use crate::tui::{Modifier, Style};
         let theme = Theme::default();
         let mut buf = Buffer::empty(Rect::new(0, 0, 5, 3));
@@ -154,13 +154,10 @@ mod tests {
         let ribbon = buf.get(0, 1);
         assert_eq!(ribbon.symbol, SELECTION_RIBBON);
         assert_eq!(ribbon.fg, Some(theme.selection));
-        assert!(ribbon.modifier.contains(Modifier::UNDERLINE));
-        assert_eq!(ribbon.underline_color, Some(theme.selection));
 
         for x in 1..4 {
             let cell = buf.get(x, 1);
-            assert!(cell.modifier.contains(Modifier::UNDERLINE), "x={}", x);
-            assert_eq!(cell.underline_color, Some(theme.selection));
+            assert_eq!(cell.modifier, Modifier::BOLD, "x={}", x);
             assert_eq!(cell.bg, None);
         }
         assert_eq!(buf.get(1, 1).fg, Some(theme.commit_hash));
