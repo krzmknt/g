@@ -36,11 +36,9 @@ impl Scrollbar {
         // Calculate thumb size and position
         let thumb_height = (self.visible_items * track_height / self.total_items).max(1);
         let max_scroll = self.total_items.saturating_sub(self.visible_items);
-        let thumb_position = if max_scroll > 0 {
-            self.scroll_position * (track_height - thumb_height) / max_scroll
-        } else {
-            0
-        };
+        let thumb_position = (self.scroll_position * (track_height - thumb_height))
+            .checked_div(max_scroll)
+            .unwrap_or(0);
 
         let x = area.x;
 

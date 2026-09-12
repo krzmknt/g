@@ -196,7 +196,7 @@ impl FileTreeView {
                         }
                         None
                     } else {
-                        filtered.sort_by(|a, b| a.path.to_lowercase().cmp(&b.path.to_lowercase()));
+                        filtered.sort_by_cached_key(|e| e.path.to_lowercase());
                         Some(filtered)
                     }
                 } else {

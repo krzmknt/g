@@ -178,7 +178,7 @@ impl Repository {
         }
 
         // Sort branches by commit time (most recent first) to match graph view order
-        branches.sort_by(|a, b| b.last_commit.time.cmp(&a.last_commit.time));
+        branches.sort_by_key(|b| std::cmp::Reverse(b.last_commit.time));
 
         Ok(branches)
     }
@@ -821,7 +821,7 @@ impl Repository {
         }
 
         // Sort by timestamp descending (newest first)
-        tags.sort_by(|a, b| b.timestamp.cmp(&a.timestamp));
+        tags.sort_by_key(|t| std::cmp::Reverse(t.timestamp));
 
         Ok(tags)
     }
@@ -1485,7 +1485,7 @@ impl Repository {
 
         let mut entries = Vec::new();
         self.collect_files_recursive("", &status_map, &mut entries)?;
-        entries.sort_by(|a, b| a.path.to_lowercase().cmp(&b.path.to_lowercase()));
+        entries.sort_by_cached_key(|e| e.path.to_lowercase());
         Ok(entries)
     }
 
