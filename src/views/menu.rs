@@ -158,6 +158,7 @@ impl MenuView {
 
         let inner = block.inner(area);
         block.render(area, buf);
+        let (gutter, inner) = inner.split_vertical(1);
 
         if inner.height < 1 {
             return;
@@ -172,9 +173,7 @@ impl MenuView {
             let is_selected = self.selected == i;
             let is_current = current_panel == Some(*panel);
 
-            let style = if is_selected {
-                Style::new().fg(theme.selection_text).bg(theme.selection)
-            } else if is_current {
+            let style = if is_current {
                 Style::new().fg(theme.branch_current).bold()
             } else {
                 Style::new().fg(theme.foreground)
@@ -183,6 +182,9 @@ impl MenuView {
             let marker = if is_current { "* " } else { "  " };
             let line = format!("{}{} {}", marker, panel.shortcut(), panel.name());
             buf.set_string_truncated(inner.x, y, &line, inner.width, style);
+            if is_selected {
+                theme.mark_selected_row(buf, gutter, Rect::new(inner.x, y, inner.width, 1));
+            }
         }
     }
 }

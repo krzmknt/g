@@ -95,11 +95,12 @@ impl WorktreeView {
 
         let block = Block::new()
             .title(&title)
-            .borders(Borders::ALL)
+            .borders(Borders::TOP)
             .border_style(Style::new().fg(border_color));
 
         let inner = block.inner(area);
         block.render(area, buf);
+        let (gutter, inner) = inner.split_vertical(1);
 
         if inner.height < 1 {
             return;
@@ -157,19 +158,11 @@ impl WorktreeView {
                 let y = inner.y + i as u16;
                 let is_selected = self.selected == self.offset + i;
 
-                let style = if is_selected && focused {
-                    Style::new().fg(theme.selection_text).bg(theme.selection)
-                } else if wt.is_main {
+                let style = if wt.is_main {
                     Style::new().fg(theme.branch_current)
                 } else {
                     Style::new().fg(theme.foreground)
                 };
-
-                // Fill full line width when selected and focused
-                if is_selected && focused {
-                    let blank_line = " ".repeat(content_width as usize);
-                    buf.set_string(inner.x, y, &blank_line, style);
-                }
 
                 let lock_icon = if wt.is_locked { " " } else { "" };
                 let main_icon = if wt.is_main { "* " } else { "  " };
@@ -177,6 +170,9 @@ impl WorktreeView {
                 // Apply horizontal scroll
                 let display_line: String = line.chars().skip(self.h_offset).collect();
                 buf.set_string_truncated(inner.x, y, &display_line, content_width, style);
+                if is_selected && focused {
+                    theme.mark_selected_row(buf, gutter, Rect::new(inner.x, y, content_width, 1));
+                }
             }
         }
 

@@ -251,11 +251,12 @@ impl BranchesView {
         let title = format!(" Branches{} ", detail_indicator);
         let block = Block::new()
             .title(&title)
-            .borders(Borders::ALL)
+            .borders(Borders::TOP)
             .border_style(Style::new().fg(border_color));
 
         let inner = block.inner(area);
         block.render(area, buf);
+        let (gutter, inner) = inner.split_vertical(1);
 
         if inner.height < 1 {
             return;
@@ -311,19 +312,11 @@ impl BranchesView {
             let is_selected = self.selected == self.offset + i;
             let is_search_match = self.search_results.contains(&(self.offset + i));
 
-            let style = if is_selected && focused {
-                Style::new().fg(theme.selection_text).bg(theme.selection)
-            } else if is_search_match {
+            let style = if is_search_match {
                 Style::new().fg(theme.diff_hunk)
             } else {
                 Style::new().fg(item.color)
             };
-
-            // Fill full line width when selected and focused
-            if is_selected && focused {
-                let blank_line = " ".repeat(content_width as usize);
-                buf.set_string(inner.x, y, &blank_line, style);
-            }
 
             // Build full line with upstream info for horizontal scroll calculation
             let full_line = if let Some((ref upstream, _)) = item.upstream_info {
@@ -345,9 +338,7 @@ impl BranchesView {
                 if let Some((ref upstream, upstream_color)) = item.upstream_info {
                     let upstream_offset = self.h_offset - main_line_len;
                     let display_upstream: String = upstream.chars().skip(upstream_offset).collect();
-                    let upstream_style = if is_selected && focused {
-                        Style::new().fg(theme.selection_text).bg(theme.selection)
-                    } else if is_search_match {
+                    let upstream_style = if is_search_match {
                         Style::new().fg(theme.diff_hunk)
                     } else {
                         Style::new().fg(upstream_color)
@@ -370,9 +361,7 @@ impl BranchesView {
                     let main_display_len = display_main.chars().count().min(content_width as usize);
                     if main_display_len < content_width as usize {
                         let remaining_width = content_width as usize - main_display_len;
-                        let upstream_style = if is_selected && focused {
-                            Style::new().fg(theme.selection_text).bg(theme.selection)
-                        } else if is_search_match {
+                        let upstream_style = if is_search_match {
                             Style::new().fg(theme.diff_hunk)
                         } else {
                             Style::new().fg(upstream_color)
@@ -386,6 +375,10 @@ impl BranchesView {
                         );
                     }
                 }
+            }
+
+            if is_selected && focused {
+                theme.mark_selected_row(buf, gutter, Rect::new(inner.x, y, content_width, 1));
             }
         }
 

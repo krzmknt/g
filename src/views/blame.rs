@@ -107,11 +107,12 @@ impl BlameView {
 
         let block = Block::new()
             .title(&title)
-            .borders(Borders::ALL)
+            .borders(Borders::TOP)
             .border_style(Style::new().fg(border_color));
 
         let inner = block.inner(area);
         block.render(area, buf);
+        let (gutter, inner) = inner.split_vertical(1);
 
         if inner.height < 1 {
             return;
@@ -173,17 +174,7 @@ impl BlameView {
             let y = inner.y + i as u16;
             let is_selected = self.selected == self.offset + i;
 
-            let base_style = if is_selected && focused {
-                Style::new().fg(theme.selection_text).bg(theme.selection)
-            } else {
-                Style::new().fg(theme.foreground)
-            };
-
-            // Fill full line width when selected and focused
-            if is_selected && focused {
-                let blank_line = " ".repeat(content_width as usize);
-                buf.set_string(inner.x, y, &blank_line, base_style);
-            }
+            let base_style = Style::new().fg(theme.foreground);
 
             // Format: commit_id author date | line_num | content
             let author_display: String = line.author.chars().take(8).collect();
@@ -195,6 +186,9 @@ impl BlameView {
             // Apply horizontal scroll
             let display_line: String = full_line.chars().skip(self.h_offset).collect();
             buf.set_string_truncated(inner.x, y, &display_line, content_width, base_style);
+            if is_selected && focused {
+                theme.mark_selected_row(buf, gutter, Rect::new(inner.x, y, content_width, 1));
+            }
         }
 
         let scrollbar = Scrollbar::new(blame.lines.len(), height, self.offset);

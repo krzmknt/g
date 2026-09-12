@@ -14,6 +14,7 @@ These work in all panels and modes.
 | `↓`         | `j`         | Move down                 |
 | `←`         | `h`         | Previous panel / collapse |
 | `→`         | `l`         | Next panel / expand       |
+| Arrow keys  | `Ctrl+hjkl` | Focus adjacent pane       |
 | `Home`      | `g`         | Go to first item          |
 | `End`       | `G`         | Go to last item           |
 | `PageUp`    | `Ctrl+u`    | Page up                   |

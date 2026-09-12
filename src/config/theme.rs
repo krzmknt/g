@@ -1,4 +1,4 @@
-use crate::tui::Color;
+use crate::tui::{Buffer, Color, Rect, Style};
 
 #[derive(Debug, Clone)]
 pub struct Theme {
@@ -7,7 +7,6 @@ pub struct Theme {
     pub border_focused: Color,
     pub border_unfocused: Color,
     pub selection: Color,
-    pub selection_text: Color,
     pub diff_add: Color,
     pub diff_remove: Color,
     pub diff_add_bg: Color,
@@ -26,6 +25,9 @@ pub struct Theme {
     pub commit_time: Color,
     pub commit_refs: Color,
 }
+
+/// Glyph drawn in the gutter next to the selected row.
+pub const SELECTION_RIBBON: &str = "▌";
 
 pub const HIGHLIGHT_COLORS: &[(Color, &str)] = &[
     (Color::Rgb(255, 140, 0), "orange"),
@@ -48,7 +50,6 @@ impl Theme {
             border_focused: Color::Rgb(137, 180, 250), // #89b4fa
             border_unfocused: Color::Rgb(69, 71, 90),  // #45475a (dimmer)
             selection: Color::Rgb(255, 140, 0),        // Orange background
-            selection_text: Color::Rgb(0, 0, 0),       // Black text for contrast
             diff_add: Color::Rgb(166, 227, 161),       // #a6e3a1
             diff_remove: Color::Rgb(243, 139, 168),    // #f38ba8
             diff_add_bg: Color::Rgb(30, 60, 30),       // Dark green background
@@ -66,6 +67,28 @@ impl Theme {
             commit_message: Color::Rgb(205, 214, 244), // #cdd6f4 (foreground)
             commit_time: Color::Rgb(108, 112, 134), // #6c7086 (dim)
             commit_refs: Color::Rgb(166, 227, 161), // #a6e3a1 (green)
+        }
+    }
+
+    /// Mark a row as selected: a ribbon is drawn in the one-column `gutter`
+    /// and the row's content cells are made bold with their text color
+    /// brightened. Each cell keeps its own hue.
+    pub fn mark_selected_row(&self, buf: &mut Buffer, gutter: Rect, row: Rect) {
+        if gutter.width == 0 || row.y < gutter.y || row.y >= gutter.bottom() {
+            return;
+        }
+        buf.set_string(
+            gutter.x,
+            row.y,
+            SELECTION_RIBBON,
+            Style::new().fg(self.selection),
+        );
+
+        let row = buf.area.intersection(Rect::new(row.x, row.y, row.width, 1));
+        for x in row.x..row.right() {
+            let cell = buf.get_mut(x, row.y);
+            cell.fg = cell.fg.map(Color::brighten);
+            cell.set_style(Style::new().bold());
         }
     }
 
@@ -122,5 +145,52 @@ mod tests {
         let mut theme = Theme::default();
         theme.selection = Color::Rgb(1, 2, 3);
         assert_eq!(theme.highlight_color_index(), 0);
+    }
+
+    #[test]
+    fn mark_selected_row_draws_ribbon_and_bolds_and_brightens_the_row() {
+        use crate::tui::{Modifier, Style};
+        let theme = Theme::default();
+        let mut buf = Buffer::empty(Rect::new(0, 0, 5, 3));
+        buf.set_string(1, 1, "ab", Style::new().fg(theme.commit_hash));
+        let gutter = Rect::new(0, 0, 1, 3);
+        let row = Rect::new(1, 1, 3, 1);
+
+        theme.mark_selected_row(&mut buf, gutter, row);
+
+        let ribbon = buf.get(0, 1);
+        assert_eq!(ribbon.symbol, SELECTION_RIBBON);
+        assert_eq!(ribbon.fg, Some(theme.selection));
+
+        for x in 1..4 {
+            let cell = buf.get(x, 1);
+            assert_eq!(cell.modifier, Modifier::BOLD, "x={}", x);
+            assert_eq!(cell.bg, None);
+        }
+        // Text keeps its hue but is brightened
+        assert_eq!(buf.get(1, 1).fg, Some(theme.commit_hash.brighten()));
+        assert_ne!(buf.get(1, 1).fg, Some(theme.commit_hash));
+        assert_eq!(buf.get(3, 1).fg, None);
+        assert_eq!(buf.get(4, 1).modifier, Modifier::empty());
+        assert_eq!(buf.get(1, 0).modifier, Modifier::empty());
+        assert_eq!(buf.get(0, 0).symbol, " ");
+    }
+
+    #[test]
+    fn selection_ribbon_is_a_single_narrow_cell() {
+        use crate::tui::str_display_width;
+        assert_eq!(SELECTION_RIBBON.chars().count(), 1);
+        assert_eq!(str_display_width(SELECTION_RIBBON), 1);
+    }
+
+    #[test]
+    fn mark_selected_row_ignores_empty_gutter_and_rows_outside_it() {
+        let theme = Theme::default();
+        let mut buf = Buffer::empty(Rect::new(0, 0, 4, 3));
+
+        theme.mark_selected_row(&mut buf, Rect::new(0, 0, 0, 3), Rect::new(0, 1, 4, 1));
+        theme.mark_selected_row(&mut buf, Rect::new(0, 0, 1, 2), Rect::new(1, 2, 3, 1));
+
+        assert!(buf.cells.iter().all(|c| c.symbol == " "));
     }
 }

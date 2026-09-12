@@ -2,11 +2,13 @@ mod block;
 mod list;
 mod paragraph;
 mod scrollbar;
+mod separator;
 
 pub use block::{Block, Borders};
 pub use list::{List, ListItem, ListState};
 pub use paragraph::Paragraph;
 pub use scrollbar::Scrollbar;
+pub use separator::VerticalSeparator;
 
 use crate::tui::{Buffer, Rect};
 
