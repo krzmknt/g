@@ -71,7 +71,8 @@ impl Theme {
     }
 
     /// Mark a row as selected: a ribbon is drawn in the one-column `gutter`
-    /// and the row's content cells are made bold. Text colors are untouched.
+    /// and the row's content cells are made bold with their text color
+    /// brightened. Each cell keeps its own hue.
     pub fn mark_selected_row(&self, buf: &mut Buffer, gutter: Rect, row: Rect) {
         if gutter.width == 0 || row.y < gutter.y || row.y >= gutter.bottom() {
             return;
@@ -82,7 +83,13 @@ impl Theme {
             SELECTION_RIBBON,
             Style::new().fg(self.selection),
         );
-        buf.set_style(Rect::new(row.x, row.y, row.width, 1), Style::new().bold());
+
+        let row = buf.area.intersection(Rect::new(row.x, row.y, row.width, 1));
+        for x in row.x..row.right() {
+            let cell = buf.get_mut(x, row.y);
+            cell.fg = cell.fg.map(Color::brighten);
+            cell.set_style(Style::new().bold());
+        }
     }
 
     pub fn highlight_color_index(&self) -> usize {
@@ -141,7 +148,7 @@ mod tests {
     }
 
     #[test]
-    fn mark_selected_row_draws_ribbon_and_bolds_the_row() {
+    fn mark_selected_row_draws_ribbon_and_bolds_and_brightens_the_row() {
         use crate::tui::{Modifier, Style};
         let theme = Theme::default();
         let mut buf = Buffer::empty(Rect::new(0, 0, 5, 3));
@@ -160,7 +167,10 @@ mod tests {
             assert_eq!(cell.modifier, Modifier::BOLD, "x={}", x);
             assert_eq!(cell.bg, None);
         }
-        assert_eq!(buf.get(1, 1).fg, Some(theme.commit_hash));
+        // Text keeps its hue but is brightened
+        assert_eq!(buf.get(1, 1).fg, Some(theme.commit_hash.brighten()));
+        assert_ne!(buf.get(1, 1).fg, Some(theme.commit_hash));
+        assert_eq!(buf.get(3, 1).fg, None);
         assert_eq!(buf.get(4, 1).modifier, Modifier::empty());
         assert_eq!(buf.get(1, 0).modifier, Modifier::empty());
         assert_eq!(buf.get(0, 0).symbol, " ");

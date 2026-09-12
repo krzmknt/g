@@ -105,7 +105,31 @@ pub enum Color {
     Rgb(u8, u8, u8),
 }
 
+/// How far a color moves toward white when brightened (0 = unchanged,
+/// 1 = white).
+const BRIGHTEN_AMOUNT: f32 = 0.35;
+
 impl Color {
+    /// A lighter version of the color with the same hue. RGB colors move
+    /// toward white; the eight base ANSI colors map to their light variants;
+    /// colors that are already light are returned unchanged.
+    pub fn brighten(self) -> Color {
+        let lift = |v: u8| (v as f32 + (255.0 - v as f32) * BRIGHTEN_AMOUNT).round() as u8;
+        match self {
+            Color::Rgb(r, g, b) => Color::Rgb(lift(r), lift(g), lift(b)),
+            Color::Black => Color::DarkGray,
+            Color::Red => Color::LightRed,
+            Color::Green => Color::LightGreen,
+            Color::Yellow => Color::LightYellow,
+            Color::Blue => Color::LightBlue,
+            Color::Magenta => Color::LightMagenta,
+            Color::Cyan => Color::LightCyan,
+            Color::Gray | Color::DarkGray => Color::White,
+            Color::Indexed(n @ 0..=7) => Color::Indexed(n + 8),
+            other => other,
+        }
+    }
+
     pub fn to_ansi_fg(self) -> String {
         match self {
             Color::Reset => "\x1b[39m".to_string(),
@@ -195,5 +219,42 @@ impl Modifier {
 
     pub const fn union(self, other: Self) -> Self {
         Self(self.0 | other.0)
+    }
+}
+
+#[cfg(test)]
+mod brighten_tests {
+    use super::*;
+
+    #[test]
+    fn rgb_moves_toward_white_keeping_the_hue_order() {
+        let c = Color::Rgb(108, 112, 134).brighten();
+        let Color::Rgb(r, g, b) = c else {
+            panic!("expected rgb")
+        };
+        assert!(r > 108 && g > 112 && b > 134);
+        assert!(r < g && g < b);
+        assert!(b < 255);
+    }
+
+    #[test]
+    fn white_and_light_colors_are_unchanged() {
+        assert_eq!(
+            Color::Rgb(255, 255, 255).brighten(),
+            Color::Rgb(255, 255, 255)
+        );
+        assert_eq!(Color::White.brighten(), Color::White);
+        assert_eq!(Color::LightRed.brighten(), Color::LightRed);
+        assert_eq!(Color::Reset.brighten(), Color::Reset);
+    }
+
+    #[test]
+    fn named_and_indexed_base_colors_map_to_their_light_variants() {
+        assert_eq!(Color::Red.brighten(), Color::LightRed);
+        assert_eq!(Color::Black.brighten(), Color::DarkGray);
+        assert_eq!(Color::Gray.brighten(), Color::White);
+        assert_eq!(Color::Indexed(1).brighten(), Color::Indexed(9));
+        assert_eq!(Color::Indexed(9).brighten(), Color::Indexed(9));
+        assert_eq!(Color::Indexed(100).brighten(), Color::Indexed(100));
     }
 }
