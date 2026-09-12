@@ -26,8 +26,12 @@ pub struct Theme {
     pub commit_refs: Color,
 }
 
-/// Glyph drawn in the gutter next to the selected row.
-pub const SELECTION_RIBBON: &str = "▌";
+/// Glyph drawn in the gutter next to the selected row: a left and lower
+/// one-eighth block (U+1FB7C), i.e. an L whose foot meets the underline of
+/// the row's content cells instead of extending below it. Terminals that
+/// draw the Symbols for Legacy Computing block natively (WezTerm, kitty,
+/// Ghostty, Alacritty, foot, Windows Terminal) render it pixel-exact.
+pub const SELECTION_RIBBON: &str = "\u{1FB7C}";
 
 pub const HIGHLIGHT_COLORS: &[(Color, &str)] = &[
     (Color::Rgb(255, 140, 0), "orange"),
@@ -165,6 +169,13 @@ mod tests {
         assert_eq!(buf.get(4, 1).modifier, Modifier::empty());
         assert_eq!(buf.get(1, 0).modifier, Modifier::empty());
         assert_eq!(buf.get(0, 0).symbol, " ");
+    }
+
+    #[test]
+    fn selection_ribbon_is_a_single_narrow_cell() {
+        use crate::tui::str_display_width;
+        assert_eq!(SELECTION_RIBBON.chars().count(), 1);
+        assert_eq!(str_display_width(SELECTION_RIBBON), 1);
     }
 
     #[test]
