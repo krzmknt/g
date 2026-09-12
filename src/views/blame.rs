@@ -112,6 +112,7 @@ impl BlameView {
 
         let inner = block.inner(area);
         block.render(area, buf);
+        let (gutter, inner) = inner.split_vertical(1);
 
         if inner.height < 1 {
             return;
@@ -186,7 +187,7 @@ impl BlameView {
             let display_line: String = full_line.chars().skip(self.h_offset).collect();
             buf.set_string_truncated(inner.x, y, &display_line, content_width, base_style);
             if is_selected && focused {
-                theme.highlight_selection(buf, Rect::new(inner.x, y, content_width, 1));
+                theme.mark_selected_row(buf, gutter, y);
             }
         }
 

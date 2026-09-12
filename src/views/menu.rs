@@ -158,6 +158,7 @@ impl MenuView {
 
         let inner = block.inner(area);
         block.render(area, buf);
+        let (gutter, inner) = inner.split_vertical(1);
 
         if inner.height < 1 {
             return;
@@ -182,7 +183,7 @@ impl MenuView {
             let line = format!("{}{} {}", marker, panel.shortcut(), panel.name());
             buf.set_string_truncated(inner.x, y, &line, inner.width, style);
             if is_selected {
-                theme.highlight_selection(buf, Rect::new(inner.x, y, inner.width, 1));
+                theme.mark_selected_row(buf, gutter, y);
             }
         }
     }

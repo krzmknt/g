@@ -1,4 +1,4 @@
-use crate::tui::{Buffer, Color, Rect};
+use crate::tui::{Buffer, Color, Rect, Style};
 
 #[derive(Debug, Clone)]
 pub struct Theme {
@@ -7,7 +7,6 @@ pub struct Theme {
     pub border_focused: Color,
     pub border_unfocused: Color,
     pub selection: Color,
-    pub selection_text: Color,
     pub diff_add: Color,
     pub diff_remove: Color,
     pub diff_add_bg: Color,
@@ -26,6 +25,9 @@ pub struct Theme {
     pub commit_time: Color,
     pub commit_refs: Color,
 }
+
+/// Glyph drawn in the gutter next to the selected row.
+pub const SELECTION_RIBBON: &str = "▌";
 
 pub const HIGHLIGHT_COLORS: &[(Color, &str)] = &[
     (Color::Rgb(255, 140, 0), "orange"),
@@ -48,7 +50,6 @@ impl Theme {
             border_focused: Color::Rgb(137, 180, 250), // #89b4fa
             border_unfocused: Color::Rgb(69, 71, 90),  // #45475a (dimmer)
             selection: Color::Rgb(255, 140, 0),        // Orange background
-            selection_text: Color::Rgb(0, 0, 0),       // Black text for contrast
             diff_add: Color::Rgb(166, 227, 161),       // #a6e3a1
             diff_remove: Color::Rgb(243, 139, 168),    // #f38ba8
             diff_add_bg: Color::Rgb(30, 60, 30),       // Dark green background
@@ -69,10 +70,18 @@ impl Theme {
         }
     }
 
-    /// Paint the selection background over `area`, keeping each cell's own
-    /// text color unless it would be unreadable on the selection color.
-    pub fn highlight_selection(&self, buf: &mut Buffer, area: Rect) {
-        buf.highlight(area, self.selection, self.selection_text);
+    /// Mark row `y` as selected by drawing a ribbon in the one-column
+    /// `gutter` to the left of the row's content. Text colors are untouched.
+    pub fn mark_selected_row(&self, buf: &mut Buffer, gutter: Rect, y: u16) {
+        if gutter.width == 0 || y < gutter.y || y >= gutter.bottom() {
+            return;
+        }
+        buf.set_string(
+            gutter.x,
+            y,
+            SELECTION_RIBBON,
+            Style::new().fg(self.selection),
+        );
     }
 
     pub fn highlight_color_index(&self) -> usize {
@@ -131,17 +140,29 @@ mod tests {
     }
 
     #[test]
-    fn highlight_selection_keeps_readable_text_color() {
-        use crate::tui::Style;
+    fn mark_selected_row_draws_ribbon_in_gutter_only() {
         let theme = Theme::default();
-        let mut buf = Buffer::empty(Rect::new(0, 0, 4, 1));
-        buf.set_string(0, 0, "ab", Style::new().fg(theme.commit_hash));
-        buf.set_string(2, 0, "cd", Style::new().fg(theme.selection));
+        let mut buf = Buffer::empty(Rect::new(0, 0, 4, 3));
+        let gutter = Rect::new(0, 0, 1, 3);
 
-        theme.highlight_selection(&mut buf, Rect::new(0, 0, 4, 1));
+        theme.mark_selected_row(&mut buf, gutter, 1);
 
-        assert_eq!(buf.get(0, 0).fg, Some(theme.commit_hash));
-        assert_eq!(buf.get(2, 0).fg, Some(theme.selection_text));
-        assert!((0..4).all(|x| buf.get(x, 0).bg == Some(theme.selection)));
+        assert_eq!(buf.get(0, 1).symbol, SELECTION_RIBBON);
+        assert_eq!(buf.get(0, 1).fg, Some(theme.selection));
+        assert_eq!(buf.get(0, 1).bg, None);
+        assert_eq!(buf.get(0, 0).symbol, " ");
+        assert_eq!(buf.get(0, 2).symbol, " ");
+        assert_eq!(buf.get(1, 1).symbol, " ");
+    }
+
+    #[test]
+    fn mark_selected_row_ignores_empty_gutter_and_rows_outside_it() {
+        let theme = Theme::default();
+        let mut buf = Buffer::empty(Rect::new(0, 0, 4, 3));
+
+        theme.mark_selected_row(&mut buf, Rect::new(0, 0, 0, 3), 1);
+        theme.mark_selected_row(&mut buf, Rect::new(0, 0, 1, 2), 2);
+
+        assert!(buf.cells.iter().all(|c| c.symbol == " "));
     }
 }

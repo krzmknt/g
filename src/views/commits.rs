@@ -388,6 +388,7 @@ impl CommitsView {
 
         let inner = block.inner(area);
         block.render(area, buf);
+        let (gutter, inner) = inner.split_vertical(1);
 
         if inner.height < 1 || inner.width < 20 {
             return;
@@ -479,13 +480,13 @@ impl CommitsView {
 
         match self.view_mode {
             CommitsViewMode::Compact => {
-                self.render_compact(inner, buf, theme, height, content_width, focused)
+                self.render_compact(gutter, inner, buf, theme, height, content_width, focused)
             }
             CommitsViewMode::Detailed => {
-                self.render_detailed(inner, buf, theme, height, content_width, focused)
+                self.render_detailed(gutter, inner, buf, theme, height, content_width, focused)
             }
             CommitsViewMode::Graph => {
-                self.render_graph(inner, buf, theme, height, content_width, focused)
+                self.render_graph(gutter, inner, buf, theme, height, content_width, focused)
             }
         }
 
@@ -495,8 +496,10 @@ impl CommitsView {
         scrollbar.render(scrollbar_area, buf, Style::new().fg(theme.border));
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn render_compact(
         &self,
+        gutter: Rect,
         inner: Rect,
         buf: &mut Buffer,
         theme: &Theme,
@@ -571,7 +574,7 @@ impl CommitsView {
             }
 
             if is_selected && focused {
-                theme.highlight_selection(buf, Rect::new(inner.x, y, content_width, 1));
+                theme.mark_selected_row(buf, gutter, y);
             }
         }
     }
@@ -599,8 +602,10 @@ impl CommitsView {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn render_detailed(
         &self,
+        gutter: Rect,
         inner: Rect,
         buf: &mut Buffer,
         theme: &Theme,
@@ -688,7 +693,7 @@ impl CommitsView {
             }
 
             if is_selected && focused {
-                theme.highlight_selection(buf, Rect::new(inner.x, y, content_width, 1));
+                theme.mark_selected_row(buf, gutter, y);
             }
         }
     }
@@ -1045,8 +1050,10 @@ impl CommitsView {
         result.join(", ")
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn render_graph(
         &self,
+        gutter: Rect,
         inner: Rect,
         buf: &mut Buffer,
         theme: &Theme,
@@ -1180,7 +1187,7 @@ impl CommitsView {
             }
 
             if is_selected && focused {
-                theme.highlight_selection(buf, Rect::new(inner.x, y, content_width, 1));
+                theme.mark_selected_row(buf, gutter, y);
             }
         }
     }
