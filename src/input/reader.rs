@@ -143,10 +143,11 @@ impl EventReader {
             0 => KeyEvent::new(KeyCode::Null, Modifiers::NONE),
             // Tab (0x09) - must be before Ctrl range
             9 => KeyEvent::new(KeyCode::Tab, Modifiers::NONE),
-            // Enter (0x0A, 0x0D) - must be before Ctrl range
-            10 | 13 => KeyEvent::new(KeyCode::Enter, Modifiers::NONE),
-            // Ctrl+A through Ctrl+Z (excluding Tab=9, LF=10, CR=13)
-            1..=8 | 11..=12 | 14..=26 => {
+            // Enter (0x0D) - must be before Ctrl range. The terminal runs with
+            // ICRNL disabled, so Enter arrives as CR and LF (0x0A) is Ctrl+J.
+            13 => KeyEvent::new(KeyCode::Enter, Modifiers::NONE),
+            // Ctrl+A through Ctrl+Z (excluding Tab=9 and CR=13)
+            1..=8 | 10..=12 | 14..=26 => {
                 let c = (byte - 1 + b'a') as char;
                 KeyEvent::new(KeyCode::Char(c), Modifiers::CTRL)
             }
@@ -439,5 +440,45 @@ impl EventReader {
             result = result.union(Modifiers::CTRL);
         }
         result
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn parse(bytes: &[u8]) -> Event {
+        let mut reader = EventReader::new();
+        reader.buffer[..bytes.len()].copy_from_slice(bytes);
+        reader.buffer_len = bytes.len();
+        reader.parse_event().0
+    }
+
+    #[test]
+    fn carriage_return_is_enter() {
+        assert_eq!(
+            parse(&[13]),
+            Event::Key(KeyEvent::new(KeyCode::Enter, Modifiers::NONE))
+        );
+    }
+
+    #[test]
+    fn line_feed_is_ctrl_j() {
+        assert_eq!(parse(&[10]), Event::Key(KeyEvent::ctrl('j')));
+    }
+
+    #[test]
+    fn control_bytes_map_to_ctrl_hjkl() {
+        assert_eq!(parse(&[8]), Event::Key(KeyEvent::ctrl('h')));
+        assert_eq!(parse(&[11]), Event::Key(KeyEvent::ctrl('k')));
+        assert_eq!(parse(&[12]), Event::Key(KeyEvent::ctrl('l')));
+    }
+
+    #[test]
+    fn tab_stays_tab() {
+        assert_eq!(
+            parse(&[9]),
+            Event::Key(KeyEvent::new(KeyCode::Tab, Modifiers::NONE))
+        );
     }
 }

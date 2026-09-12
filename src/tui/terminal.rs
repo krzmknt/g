@@ -113,8 +113,10 @@ impl Terminal {
 
             // Disable canonical mode, echo, and signals
             termios.c_lflag &= !(libc::ICANON | libc::ECHO | libc::ISIG | libc::IEXTEN);
-            // Disable input processing (but keep ICRNL for proper input)
-            termios.c_iflag &= !(libc::IXON | libc::BRKINT | libc::INPCK | libc::ISTRIP);
+            // Disable input processing. ICRNL is off so Enter arrives as CR
+            // and Ctrl+J (LF) stays distinguishable from it.
+            termios.c_iflag &=
+                !(libc::IXON | libc::ICRNL | libc::BRKINT | libc::INPCK | libc::ISTRIP);
             // Keep output processing enabled for proper terminal output
             // termios.c_oflag &= !libc::OPOST;  // Don't disable this
             // Set character size to 8 bits

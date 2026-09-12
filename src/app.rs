@@ -1783,7 +1783,7 @@ impl App {
 
                     let mut global_cmds_vec: Vec<(&str, &str)> = vec![
                         ("q", "quit"),
-                        ("arrows", "focus"),
+                        ("arrows/^hjkl", "focus"),
                         ("H/J/K/L", "resize"),
                         ("j/k", "move"),
                     ];
@@ -3580,6 +3580,14 @@ impl App {
             // Menu toggle
             KeyCode::Char('m') => {
                 self.menu_view.toggle();
+            }
+
+            // Ctrl+hjkl for pane navigation (same as arrow keys)
+            KeyCode::Char('h') if key.modifiers.contains(Modifiers::CTRL) => self.focus_pane_left(),
+            KeyCode::Char('j') if key.modifiers.contains(Modifiers::CTRL) => self.focus_pane_down(),
+            KeyCode::Char('k') if key.modifiers.contains(Modifiers::CTRL) => self.focus_pane_up(),
+            KeyCode::Char('l') if key.modifiers.contains(Modifiers::CTRL) => {
+                self.focus_pane_right()
             }
 
             // Vim navigation (j/k for item movement within panel, g/G for top/bottom)
