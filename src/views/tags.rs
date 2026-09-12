@@ -160,6 +160,12 @@ impl TagsView {
         }
 
         let height = inner.height as usize;
+        // The focused selection needs one extra row for its bottom border
+        let height = if focused && height > 1 {
+            height - 1
+        } else {
+            height
+        };
 
         if self.selected < self.offset {
             self.offset = self.selected;
@@ -201,7 +207,13 @@ impl TagsView {
             buf.set_string(x, y, msg, Style::new().fg(theme.untracked));
         } else {
             for (i, tag) in self.tags.iter().skip(self.offset).take(height).enumerate() {
-                let y = inner.y + i as u16;
+                let y = inner.y
+                    + i as u16
+                    + if focused && self.offset + i > self.selected {
+                        1
+                    } else {
+                        0
+                    };
                 let is_selected = self.selected == self.offset + i;
                 let is_search_match = self.search_results.contains(&(self.offset + i));
 
