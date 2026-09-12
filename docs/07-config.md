@@ -69,7 +69,6 @@ foreground = "#cdd6f4"
 border = "#6c7086"
 border_focused = "#89b4fa"
 selection = "#313244"
-selection_text = "#cdd6f4"
 
 # Syntax colors
 diff_add = "#a6e3a1"
@@ -92,7 +91,6 @@ foreground = "#4c4f69"
 border = "#9ca0b0"
 border_focused = "#1e66f5"
 selection = "#ccd0da"
-selection_text = "#4c4f69"
 diff_add = "#40a02b"
 diff_remove = "#d20f39"
 diff_hunk = "#04a5e5"
@@ -181,7 +179,6 @@ pub struct Theme {
     pub border: Color,
     pub border_focused: Color,
     pub selection: Color,
-    pub selection_text: Color,
     pub diff_add: Color,
     pub diff_remove: Color,
     pub diff_hunk: Color,
@@ -471,7 +468,6 @@ impl Config {
             border: get_color("border")?,
             border_focused: get_color("border_focused")?,
             selection: get_color("selection")?,
-            selection_text: get_color("selection_text")?,
             diff_add: get_color("diff_add")?,
             diff_remove: get_color("diff_remove")?,
             diff_hunk: get_color("diff_hunk")?,
